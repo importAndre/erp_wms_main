@@ -3,3 +3,7 @@ venv/
 /venv
 /venv/
 /venv/*
+_pycache_
+.env
+.env.*
+homely_config.py
