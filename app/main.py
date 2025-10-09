@@ -3,6 +3,7 @@ from .database import engine, Base
 
 from app.routers.users import router as user_router
 from app.routers.companies import router as company_router
+from app.routers.products import router as product_router
 
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
@@ -14,3 +15,4 @@ def hello():
 
 app.include_router(user_router)
 app.include_router(company_router)
+app.include_router(product_router)

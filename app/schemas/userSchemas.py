@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 
 class UserBase(BaseModel):
@@ -14,3 +14,15 @@ class UserCreate(UserBase):
 
 class UserResponse(UserBase):
     is_active: bool
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenData(BaseModel):
+    id: Optional[int] = None
