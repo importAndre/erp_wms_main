@@ -4,8 +4,9 @@ from ..models import productModels
 from ..schemas import productSchemas
 from ..database import get_db
 from ..oauth2 import get_current_user
-from ..services import userServices
+from ..services import userServices, productServices
 from datetime import datetime
+from typing import List, Optional
 
 router = APIRouter(
     prefix="/products",
@@ -21,7 +22,6 @@ def create_product(
     db: Session = Depends(get_db)
 ):
     user = userServices.User(user=current_user)
-    print(user.username)
     
     new_product = productModels.Product(
         company_id=product.company_id,
@@ -40,3 +40,45 @@ def create_product(
 
     return new_product
 
+@router.get("/", response_model=List[productSchemas.ProductResponse])
+def get_products(
+    current_user=Depends(get_current_user),
+    refresh: Optional[bool] = False,
+    db: Session = Depends(get_db)
+):
+    user = userServices.User(user=current_user)
+    if not user.products or refresh:
+        user.products = db.query(productModels.Product).all()
+    return user.products
+
+
+@router.get("/pid/{pid}", response_model=productSchemas.ProductResponse)
+def get_product(
+    pid: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    prod = productServices.Product(pid=pid, db=db)
+    return prod.get_product()
+
+@router.put("/edit", response_model=productSchemas.ProductResponse)
+def edit_product(
+    product: productSchemas.ProductEdit,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not product.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="product.id is required")
+
+    db_product = db.query(productModels.Product).filter(productModels.Product.id == product.id).first()
+
+    for var, value in vars(product).items():
+        if value is not None:
+            setattr(db_product, var, value)
+
+    db_product.updated_at = datetime.now()
+    db_product.updated_by = current_user.id
+    db.commit()
+    db.refresh(db_product)
+
+    return productServices.Product(product=db_product, db=db).get_product()
