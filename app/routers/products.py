@@ -15,6 +15,8 @@ router = APIRouter(
 )
 
 
+loaded_products = []
+
 @router.post("/create", response_model=productSchemas.ProductCreate)
 def create_product(
     product: productSchemas.ProductCreate,
@@ -32,7 +34,7 @@ def create_product(
         updated_by=user.id,
         updated_at=datetime.now(),
         created_at=datetime.now()
-    )
+    )   
 
     db.add(new_product)
     db.commit()
@@ -46,10 +48,13 @@ def get_products(
     refresh: Optional[bool] = False,
     db: Session = Depends(get_db)
 ):
-    user = userServices.User(user=current_user)
-    if not user.products or refresh:
-        user.products = db.query(productModels.Product).all()
-    return user.products
+    global loaded_products
+    if not loaded_products or refresh:
+        query = db.query(productModels.Product).all()
+        for item in query:
+            loaded_products.append(productServices.Product(product=item, db=db).get_product())
+    return loaded_products
+
 
 
 @router.get("/pid/{pid}", response_model=productSchemas.ProductResponse)

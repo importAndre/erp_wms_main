@@ -4,7 +4,8 @@ from ..models import accountModels
 from ..schemas import userSchemas
 from ..database import get_db
 from .. import utils, oauth2
-
+from ..oauth2 import get_current_user
+from ..services import userServices
 
 router = APIRouter(
     prefix="/users",
@@ -17,7 +18,7 @@ def create_user(
     user: userSchemas.UserCreate, 
     db: Session = Depends(get_db)
     ):
-    db_user = db.query(accountModels.User.email == user.email).first()
+    db_user = db.query(accountModels.User).filter(accountModels.User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
     
@@ -28,6 +29,7 @@ def create_user(
         email=user.email,
         hashed_password=hashed_password,
         is_active=True,
+        is_superuser=user.is_superuser,
         is_employee=True if user.is_employee else False,
         employee_id=user.employee_id
     )
@@ -58,3 +60,11 @@ def login(
     access_token = oauth2.create_access_token(data={"user_id": user.id})
 
     return {"access_token": access_token, "token_type": "bearer"}
+
+@router.get("/me")
+def get_user_me(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    return userServices.User(user=current_user, db=db).get_user()
+    
