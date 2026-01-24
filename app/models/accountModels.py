@@ -17,7 +17,7 @@ class Company(Base):
     capital_social = Column(Float, nullable=True)
     opcao_pelo_mei = Column(Boolean, nullable=True)
     opcao_pelo_simples = Column(Boolean, nullable=True)
-    incricao_estadual = Column(String, nullable=True)
+    inscricao_estadual = Column(String, nullable=True)
 
 
 class User(Base):

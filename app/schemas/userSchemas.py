@@ -1,5 +1,6 @@
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
+from datetime import datetime
 
 class UserBase(BaseModel):
     username: str
@@ -27,3 +28,32 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     id: Optional[int] = None
+
+
+class UserTasks(BaseModel):
+    task: Optional[str] = None
+    date_limit: Optional[datetime] = None
+
+
+class SuperUserMainPage(BaseModel):
+
+    class Finantials(BaseModel):
+
+        class Revenue(BaseModel):
+            revenue: Optional[float] = None
+            profit: Optional[float] = None
+            to_pay: Optional[float] = None
+            stock_value: Optional[float] = None
+    
+        day_infos: Optional[Revenue] = None
+        month_infos: Optional[Revenue] = None
+        year_infos: Optional[Revenue] = None
+
+
+    finantials: Optional[Finantials] = None
+    tasks: Optional[List[UserTasks]] = None
+
+
+class UserMainPage(BaseModel):
+    pass
+
