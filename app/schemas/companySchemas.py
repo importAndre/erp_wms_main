@@ -21,4 +21,4 @@ class CompanyCreate(CompanyBase):
     pass
 
 class CompanyResponse(CompanyBase):
-    pass
+    id: Optional[int] = None

@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from ..models.accountModels import Company
 from ..schemas import companySchemas
 from ..database import get_db
+from ..services import companyServices
 
 router = APIRouter(
     prefix="/company",
@@ -38,4 +39,4 @@ def register_company(
     db.commit()
     db.refresh(new_company)
 
-    return new_company
+    return companyServices.Company(company_id=new_company.id, db=db)
