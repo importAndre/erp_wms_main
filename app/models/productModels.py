@@ -1,6 +1,7 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, UniqueConstraint, Float, text
 from ..database import Base
 from sqlalchemy.sql.sqltypes import TIMESTAMP
+from sqlalchemy.orm import relationship
 
 
 class Product(Base):
@@ -22,7 +23,23 @@ class Product(Base):
     updated_at = Column(TIMESTAMP(timezone=True), server_default=text('now()'))
     created_at = Column(TIMESTAMP(timezone=True), server_default=text('now()')) 
 
+    identificators = relationship("ProductIdentificator", back_populates="product")
+
 
     __table_args__ = (
         UniqueConstraint('company_id', 'sku', name='uq_company_sku'),
     )
+
+
+class ProductIdentificator(Base):
+    __tablename__ = "DimProductIdentificators"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("DimProducts.id"), nullable=False)
+    code = Column(String, nullable=False)
+    code_type = Column(String, nullable=True)
+    amount = Column(Float, nullable=False, default=1)
+    created_by = Column(Integer, ForeignKey('DimUsers.id'), nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=text('now()')) 
+
+    product = relationship("Product", back_populates="identificators")

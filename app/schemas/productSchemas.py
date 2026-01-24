@@ -12,6 +12,18 @@ class ProductBase(BaseModel):
 class ProductCreate(ProductBase):
     pass
 
+class ProductAddIdentif(BaseModel):
+    product_id: int
+    code: str
+    code_type: Optional[str] = None
+    amount: int = 1
+
+
+class IdentifResponse(ProductAddIdentif):
+    created_by: Optional[UserResponse] = None
+    created_at: Optional[datetime] = None
+
+
 class ProductResponse(ProductBase):
     id: Optional[int] = None
     last_entry_price: Optional[float] = None

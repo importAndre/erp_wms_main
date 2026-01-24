@@ -60,11 +60,12 @@ def get_products(
 @router.get("/pid/{pid}", response_model=productSchemas.ProductResponse)
 def get_product(
     pid: int,
+    identificators: Optional[bool] = False,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     prod = productServices.Product(pid=pid, db=db)
-    return prod.get_product()
+    return prod.get_product(identifs=identificators)
 
 @router.put("/edit", response_model=productSchemas.ProductResponse)
 def edit_product(
@@ -87,3 +88,33 @@ def edit_product(
     db.refresh(db_product)
 
     return productServices.Product(product=db_product, db=db).get_product()
+
+
+@router.post("/identificator")
+def add_identif(
+    product: productSchemas.ProductAddIdentif,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    
+    query = db.query(productModels.ProductIdentificator)\
+            .filter(productModels.ProductIdentificator.product_id == product.product_id)\
+            .filter(productModels.ProductIdentificator.code == product.code)\
+            .filter(productModels.ProductIdentificator.code_type == product.code_type)\
+            .filter(productModels.ProductIdentificator.amount == product.amount).first()
+    if query:
+        return productServices.Product(product=query.product, db=db).get_product()
+
+    new_identif = productModels.ProductIdentificator(
+        product_id=product.product_id,
+        code=product.code,
+        code_type=product.code_type,
+        amount=product.amount,
+        created_by=current_user.id,
+        created_at=datetime.now()
+    )
+
+    db.add(new_identif)
+    db.commit()
+    db.refresh(new_identif)
+    return productServices.Product(product=new_identif.product, db=db).get_product()

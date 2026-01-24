@@ -5,6 +5,9 @@ from ..database import get_db
 from fastapi import Depends
 from typing import Optional
 from .userServices import User
+import requests
+from ..server_config import API_URL
+
 
 products = {}
 
@@ -40,7 +43,6 @@ class Product:
             raise ValueError("Please inform product id (pid)")
 
         if self.pid in products and not refresh:
-            print('here')
             cached = products[self.pid]
             # self.__dict__.update(cached.__dict__)
             # return
@@ -58,11 +60,12 @@ class Product:
 
             products[self.pid] = self
 
-    def get_product(self, refresh=False):
+    def get_product(self, refresh=False, identifs=False):
         if not hasattr(self, "company_id") or self.company_id is None or refresh:
             self._load_product()
 
         return productSchemas.ProductResponse(
+            id=self.pid,
             company_id=self.company_id,
             sku=self.sku,
             name=self.name,
@@ -77,6 +80,7 @@ class Product:
             created_at=self.created_at,
             updated_by=User(user_id=self.updated_by, db=self.db).get_user(),
             updated_at=self.updated_at,
+            identificators=self.get_identificators() if identifs else None
         )
     
     def alter_field(self, **values):
@@ -96,6 +100,23 @@ class Product:
         # for k, v in values.items():
         #     setattr(self, k, v)
         self._load_product(refresh=True)
+
+
+    def get_identificators(self):
+        query = self.db.query(productModels.ProductIdentificator).filter(productModels.ProductIdentificator.product_id == self.pid).all()
+        return [productSchemas.IdentifResponse(
+            product_id=item.product_id,
+            code=item.code,
+            code_type=item.code_type,
+            created_at=item.created_at,
+            created_by=User(user_id=item.created_by, db=self.db).get_user()
+        ) for item in query]
+
+
+
+    def _update_price(self):
+        # req = requests.get(f"{API_URL}/invoices/product/{}")
+        pass        
 
         
 
