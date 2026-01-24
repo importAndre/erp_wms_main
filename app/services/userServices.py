@@ -1,9 +1,10 @@
-from ..models.accountModels import User as UserModel, Employee
+from ..models.accountModels import User as UserModel, Employee, Company as CompanyModel
 from sqlalchemy.orm import Session
 from ..database import get_db
 from fastapi import Depends
 from typing import Optional, List
 from ..schemas import userSchemas
+from ..services.companyServices import Company
 
 class User:
     def __init__(
@@ -18,6 +19,7 @@ class User:
         self._preferences = None
         self.user_id = user_id
         self._load_user()
+        self.companies = None
 
     def __getattr__(self, username):
         return getattr(self._user, username)
@@ -48,6 +50,13 @@ class User:
             self._user.is_employee = True
         self.employee = e
         return self.employee
+    
+    def get_companies(self):
+        if self.companies:
+            return self.companies
+        query = self.db.query(CompanyModel).all()
+        self.companies = [Company(company_id=item.id, db=self.db).get_company() for item in query]
+        return self.companies
     
 
         
