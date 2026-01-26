@@ -2,9 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from ..models.accountModels import Employee
 from ..schemas import employeesSchemas
+from ..services import employeeServices
 from ..database import get_db
 from ..oauth2 import get_current_user
-
+from typing import Union, List, Optional
 
 router = APIRouter(
     prefix="/employees",
@@ -18,7 +19,6 @@ def get_employees(
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
-        print("not")
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission Denied")
     return db.query(Employee).all()
 
@@ -48,3 +48,18 @@ def register_employee(
     db.refresh(new_employee)
 
     return new_employee
+
+@router.get("/search/{emp_id}", response_model=Union[employeesSchemas.EmployeeResponse, List[employeesSchemas.EmployeeResponse]])
+def get_employee(
+    emp_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> Union[employeesSchemas.EmployeeResponse, List[employeesSchemas.EmployeeResponse]]:
+
+    if not emp_id:
+        employees = db.query(Employee).all()
+        return [employeeServices.Employee(emp_id=emp.id, db=db).get_employee() for emp in employees]
+    return employeeServices.Employee(emp_id=emp_id, db=db).get_employee()
+
+
+    

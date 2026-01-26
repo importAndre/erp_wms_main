@@ -19,5 +19,4 @@ class EmployeeRegister(EmployeeBase):
     pass
 
 class EmployeeResponse(EmployeeBase):
-    pass
-    
+    id: Optional[int] = None
