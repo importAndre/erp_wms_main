@@ -11,6 +11,7 @@ from app.routers.compositions import router as comp_router
 from app.routers.employees import router as employees_router
 from app.routers.identificators import router as identifs_router
 from app.routers.stock import router as stock_router
+from app.routers.mercado_livre import router as ml_router
 
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
@@ -37,3 +38,4 @@ app.include_router(comp_router)
 app.include_router(employees_router)
 app.include_router(identifs_router)
 app.include_router(stock_router)
+app.include_router(ml_router)
