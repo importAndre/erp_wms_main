@@ -23,7 +23,8 @@ def create_product(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    user = userServices.User(user=current_user)
+    user = userServices.User(user=current_user, db=db)
+    user.check_users_permission(task='create_product')
     
     new_product = productModels.Product(
         company_id=product.company_id,
@@ -75,6 +76,8 @@ def edit_product(
 ):
     if not product.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="product.id is required")
+    
+    userServices.User(user=current_user, db=db).check_users_permission(task='edit_product')
 
     db_product = db.query(productModels.Product).filter(productModels.Product.id == product.id).first()
 

@@ -1,5 +1,5 @@
 from ..database import Base
-from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey, JSON, TIMESTAMP, text
 
 class Company(Base):
     __tablename__ = "DimCompanies"
@@ -49,3 +49,12 @@ class Employee(Base):
     company_id = Column(Integer, nullable=False)
     user_id = Column(Integer, ForeignKey("DimUsers.id"), nullable=True)
 
+class UserPersmissions(Base):
+    __tablename__ = "DimUserPermissions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("DimUsers.id"), nullable=True)
+    permissions = Column(JSON, nullable=False, default='[]')
+    updated_by = Column(Integer, ForeignKey('DimUsers.id'), nullable=False)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=text('now()'))
+    

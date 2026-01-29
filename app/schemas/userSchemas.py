@@ -16,6 +16,7 @@ class UserCreate(UserBase):
 class UserResponse(UserBase):
     id: int
     is_active: bool
+    permissions: Optional[List[str]] = None
 
 
 class UserLogin(BaseModel):
@@ -28,6 +29,13 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     id: Optional[int] = None
+    permissions: Optional[List[str]] = None
+
+
+class UserPermissionsCreate(BaseModel):
+    user_id: int
+    permission: str
+    add: Optional[bool] = True
 
 
 class UserTasks(BaseModel):

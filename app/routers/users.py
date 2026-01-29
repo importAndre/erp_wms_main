@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from ..models import accountModels
@@ -68,6 +69,40 @@ def get_user_me(
 ):
     return userServices.User(user=current_user, db=db).get_user()
     
+
+@router.post("/permission")
+def alter_permission(
+    permissions: userSchemas.UserPermissionsCreate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    user = userServices.User(user=current_user, db=db)
+    user.check_users_permission(task='alter_permission')
+
+    query = db.query(accountModels.UserPersmissions).filter(accountModels.UserPersmissions.user_id == permissions.user_id).first()
+    if not query:
+        new_per = accountModels.UserPersmissions(
+            user_id=permissions.user_id,
+            permissions=[permissions.permission],
+            updated_by=current_user.id,
+            updated_at=datetime.now()
+        )
+        db.add(new_per)
+        db.commit()
+        db.refresh(new_per)
+        return userServices.User(user_id=permissions.user_id, db=db).get_user()
+    
+    if permissions.add:
+        if permissions.permission not in query.permissions:
+            query.permissions = [*query.permissions, permissions.permission]
+    else:
+        query.permissions = [p for p in query.permissions if p != permissions.permission]
+
+    db.commit()
+
+    db.refresh(query)
+    return userServices.User(user_id=permissions.user_id, db=db).get_user()
+
 
 
 @router.get("/main")
