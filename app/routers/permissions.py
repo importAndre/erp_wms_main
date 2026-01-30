@@ -7,9 +7,23 @@ router = APIRouter(
 )
 
 pers = {
-    "alter_permission": "/users/permission",
-    "edit_product": "/products/edit",
+    "alter_permission": {
+        "/users": ["/permission"],
+    },
+    "edit_product": {
+        "/products": ["/edit"],
+    },
+    "create_product": {
+        "/products": ["/create"],
+    },
+    "create_supplier": {
+        "/suppliers": ["/create"],
+    },
+
+
+
     "create_product": "/products/create",
+    "create_supplier": "/suppliers/create"
 }
 
 @router.get("/")

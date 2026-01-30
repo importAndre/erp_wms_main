@@ -17,7 +17,7 @@ router = APIRouter(
 
 loaded_products = []
 
-@router.post("/create", response_model=productSchemas.ProductCreate)
+@router.post("/create", response_model=productSchemas.ProductResponse)
 def create_product(
     product: productSchemas.ProductCreate,
     current_user=Depends(get_current_user),
@@ -41,7 +41,9 @@ def create_product(
     db.commit()
     db.refresh(new_product)
 
-    return new_product
+    prod = productServices.Product(product=new_product, db=db).get_product()
+    loaded_products.append(prod)
+    return prod
 
 @router.get("/", response_model=List[productSchemas.ProductResponse])
 def get_products(
