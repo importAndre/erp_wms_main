@@ -8,7 +8,7 @@ class Suppliers(Base):
     __tablename__ = 'DimSuppliers'
 
     id = Column(Integer, primary_key=True, index=True)
-    internal_code = Column(String, unique=True, nullable=True)
+    internal_code = Column(String, nullable=True)
     cnpj = Column(BigInteger, unique=True, nullable=True)
     razao_social = Column(String, nullable=True)
     nome_fantasia = Column(String, nullable=True)
