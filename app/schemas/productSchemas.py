@@ -2,12 +2,14 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from .userSchemas import UserResponse
+from .supplierSchemas import SupplierResponse
 
 class ProductBase(BaseModel):
     company_id: int
     sku: str
     name: str
     picture: Optional[str] = None
+    supplier_id: Optional[int] = None
     
 class ProductCreate(ProductBase):
     pass
@@ -36,6 +38,7 @@ class ProductResponse(ProductBase):
     created_at: Optional[datetime] = None
     updated_by: Optional[UserResponse] = None
     updated_at: Optional[datetime] = None
+    supplier: Optional[SupplierResponse] = None
 
 class ProductEdit(BaseModel):
     id: int

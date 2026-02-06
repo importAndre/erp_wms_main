@@ -9,6 +9,7 @@ class Product(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("DimCompanies.id"), nullable=False)
+    supplier_id = Column(Integer, ForeignKey("DimSuppliers.id"), nullable=False)
     sku = Column(String, nullable=False)
     name = Column(String, nullable=False)
     last_entry_price = Column(Float, nullable=True)

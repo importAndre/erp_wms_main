@@ -7,6 +7,7 @@ from typing import Optional
 from .userServices import User
 import requests
 from ..server_config import API_URL
+from .supplierServices import Supplier
 
 
 products = {}
@@ -20,21 +21,22 @@ class Product:
     ):
         self.db = db
         self.pid = pid or (product.id if product else None)
- 
-        self.company_id = None
-        self.sku = None
-        self.name = None
-        self.picture = None
-        self.last_entry_price = 0
-        self.price_after_taxes = 0
-        self.stock_unit_price = 0
-        self.stock = 0
-        self.virtual_stock = 0
-        self.available_stock = 0
-        self.created_by = None
-        self.created_at = None
-        self.updated_by = None
-        self.updated_at = None
+        self._product = product
+        self.company_id = product.company_id if product else None
+        self.supplier_id = product.supplier_id if product else None
+        self.sku = product.sku if product else None
+        self.name = product.name if product else None
+        self.picture = product.picture if product else None
+        self.last_entry_price = product.last_entry_price if product else 0
+        self.price_after_taxes = product.price_after_taxes if product else 0
+        self.stock_unit_price = product.stock_unit_price if product else 0
+        self.stock = product.stock if product else 0
+        self.virtual_stock = product.virtual_stock if product else 0
+        self.available_stock = product.available_stock if product else 0
+        self.created_by = product.created_by if product else None
+        self.created_at = product.created_at if product else None
+        self.updated_by = product.updated_by if product else None
+        self.updated_at = product.updated_at if product else None
 
         self._load_product()
 
@@ -42,11 +44,8 @@ class Product:
         if not self.pid:
             raise ValueError("Please inform product id (pid)")
 
-        if self.pid in products and not refresh:
-            cached = products[self.pid]
-            # self.__dict__.update(cached.__dict__)
-            # return
-            return cached
+        if not refresh and self._product:
+            return
 
         query = (
             self.db.query(productModels.Product)
@@ -58,13 +57,12 @@ class Product:
             for column in productModels.Product.__table__.columns:
                 setattr(self, column.name, getattr(query, column.name))
 
-            products[self.pid] = self
 
     def get_product(self, refresh=False, identifs=False):
         if not hasattr(self, "company_id") or self.company_id is None or refresh:
             self._load_product()
 
-        return productSchemas.ProductResponse(
+        data = productSchemas.ProductResponse(
             id=self.pid,
             company_id=self.company_id,
             sku=self.sku,
@@ -80,8 +78,18 @@ class Product:
             created_at=self.created_at,
             updated_by=User(user_id=self.updated_by, db=self.db).get_user(),
             updated_at=self.updated_at,
-            identificators=self.get_identificators() if identifs else None
+            identificators=self.get_identificators() if identifs else None,
+            supplier=self._load_supplier()
         )
+
+        return data
+    
+
+    def _load_supplier(self):
+        if not self.supplier_id:
+            return None
+        return Supplier(sid=self.supplier_id, db=self.db).get_supplier()
+
     
     def alter_field(self, **values):
         product = (
@@ -89,11 +97,12 @@ class Product:
             .filter(productModels.Product.id == self.pid)
         )
         product.update(values)
-        aval_qt = product.first().available_stock if product.first().available_stock else 0
-        vir_qt = product.first().virtual_stock if product.first().virtual_stock else 0
+        product = product.first()
+        aval_qt = product.available_stock if product.available_stock else 0
+        vir_qt = product.virtual_stock if product.virtual_stock else 0
         
-        product.first().stock = aval_qt + vir_qt
-        print(product.first().stock)
+        product.stock = aval_qt + vir_qt
+        print(product.stock)
         self.db.commit()
 
         # # manter o objeto em memória atualizado

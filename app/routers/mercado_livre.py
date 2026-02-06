@@ -113,13 +113,15 @@ def get_infos(
     company_id: int,
     date_begin: Optional[str] = None,
     date_end: Optional[str] = None,
+    listing_id: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
     url = f'{API_URL}/mercado-livre/infos/'
     body = {
         "company_id": company_id,
         "date_begin": date_begin,
-        "date_end": date_end
+        "date_end": date_end,
+        "listing_id": listing_id
     }
 
     req = requests.post(url=url, json=body)

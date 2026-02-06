@@ -31,6 +31,7 @@ def create_product(
         sku=product.sku,
         name=product.name,
         picture=product.picture,
+        supplier_id=product.supplier_id,
         created_by=user.id,
         updated_by=user.id,
         updated_at=datetime.now(),
@@ -54,6 +55,7 @@ def get_products(
     global loaded_products
     if not loaded_products or refresh:
         query = db.query(productModels.Product).all()
+        loaded_products = []
         for item in query:
             loaded_products.append(productServices.Product(product=item, db=db).get_product())
     return loaded_products

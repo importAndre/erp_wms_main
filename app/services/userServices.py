@@ -22,24 +22,31 @@ class User:
         self._preferences = None 
         self.user_id = user_id
         self.permissions = []
-        self._load_user()
         self.companies = None
+        self._load_user()
 
     def __getattr__(self, username):
         return getattr(self._user, username)
     
     def _load_user(self):
+        # print(f"loading user:", self.user_id)
         if self._user:
             if len(self.permissions) == 0:
                 self._load_permissions()
+            if not self.companies:
+                self.get_companies()
             return
         query = self.db.query(accountModels.User).filter(accountModels.User.id == self.user_id).first()
+        # print(f"searching user:", self.user_id)
         if not query:
-            raise AttributeError("User not found")
+            raise AttributeError(f"User {self.user_id} not found")
         self._user = query
         self._load_permissions()
+        self.get_companies()
 
     def get_user(self):
+        if not self._user:
+            self._load_user()
         return userSchemas.UserResponse(
             id=self._user.id,
             username=self._user.username,
@@ -62,7 +69,7 @@ class User:
     def get_companies(self):
         if self.companies:
             return self.companies
-        query = self.db.query(accountModels.CompanyModel).all()
+        query = self.db.query(accountModels.Company).all()
         self.companies = [Company(company_id=item.id, db=self.db).get_company() for item in query]
         return self.companies
     
