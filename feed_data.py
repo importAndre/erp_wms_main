@@ -13,9 +13,9 @@ def login():
 
     url = f"{URL}/users/login"
     payload = {
-        "email": "test123@test.com",
-        "password": "test"
-    }
+        "email": "andre@homely.com.br",
+        "password": "gemialidades"
+        }
     req = requests.post(url=url, json=payload)
     TOKEN = req.json()['access_token']
 
@@ -104,6 +104,21 @@ def generate_compositions(x=10, headers=None):
 
 
 
+def feed_homely_data(item: str = 'products', headers=None):
+    import homely_config
+    if item == 'products':
+        data = homely_config.products
+
+    elif item == 'suppliers':
+        data = homely_config.suppliers
+
+    url = f"{URL}/{item}/create"
+    for i in data:
+        i['supplier_id'] = 6
+        requests.post(url=url, json=i, headers=headers)
+
+
+
 
 
 if __name__ == "__main__":
@@ -113,5 +128,6 @@ if __name__ == "__main__":
         "Content-Type": "application/json"
     }
     # generate_users()
-    generate_products(headers=headers, x=8696)
-    products = get_products(headers=headers)
+    # generate_products(headers=headers, x=8696)
+    # products = get_products(headers=headers)
+    feed_homely_data(item='products', headers=headers)

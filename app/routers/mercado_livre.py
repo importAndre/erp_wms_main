@@ -123,6 +123,7 @@ def get_infos(
         "date_end": date_end,
         "listing_id": listing_id
     }
+    print(body)
 
     req = requests.post(url=url, json=body)
     if req.status_code == 200:

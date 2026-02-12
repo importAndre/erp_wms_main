@@ -16,6 +16,7 @@ from app.routers.permissions import router as per_router
 from app.routers.suppliers import router as sup_router
 from app.routers.finantials import router as fin_router
 
+
 app = FastAPI()
 Base.metadata.create_all(bind=engine)
 

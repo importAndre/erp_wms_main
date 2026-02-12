@@ -1,5 +1,5 @@
-from ..models import productModels
-from ..schemas import productSchemas
+from ..models import productModels, identificatorsModels
+from ..schemas import productSchemas, finantialsSchemas
 from sqlalchemy.orm import Session
 from ..database import get_db
 from fastapi import Depends
@@ -37,6 +37,7 @@ class Product:
         self.created_at = product.created_at if product else None
         self.updated_by = product.updated_by if product else None
         self.updated_at = product.updated_at if product else None
+        self.identifs = None
 
         self._load_product()
 
@@ -56,6 +57,7 @@ class Product:
         if query:
             for column in productModels.Product.__table__.columns:
                 setattr(self, column.name, getattr(query, column.name))
+            # self._update_price()
 
 
     def get_product(self, refresh=False, identifs=False):
@@ -102,7 +104,6 @@ class Product:
         vir_qt = product.virtual_stock if product.virtual_stock else 0
         
         product.stock = aval_qt + vir_qt
-        print(product.stock)
         self.db.commit()
 
         # # manter o objeto em memória atualizado
@@ -112,19 +113,37 @@ class Product:
 
 
     def get_identificators(self):
-        query = self.db.query(productModels.ProductIdentificator).filter(productModels.ProductIdentificator.product_id == self.pid).all()
-        return [productSchemas.IdentifResponse(
+        query = self.db.query(identificatorsModels.Identificators).filter(identificatorsModels.Identificators.product_id == self.pid).all()
+        self.identifs = [productSchemas.IdentifResponse(
             product_id=item.product_id,
-            code=item.code,
-            code_type=item.code_type,
-            created_at=item.created_at,
-            created_by=User(user_id=item.created_by, db=self.db).get_user()
+            code=item.value,
+            code_type=item.identif_type,
+            # created_at=item.created_at,
+            # created_by=User(user_id=item.created_by, db=self.db).get_user()
         ) for item in query]
+        return self.identifs
 
 
 
     def _update_price(self):
-        # req = requests.get(f"{API_URL}/invoices/product/{}")
+        if not self.identifs:
+            self.get_identificators()
+        for i in self.identifs:
+            if i.code_type == 'supplier_code':
+                req = requests.get(f"{API_URL}/invoices/product/{i.code}")
+                if req.status_code == 200:
+                    data = req.json()
+
+                    invoice = finantialsSchemas.InvoiceBase.model_validate(data['invoice'])
+                    item = finantialsSchemas.InvoiceItemBase.model_validate(data['item'])
+                    taxes = finantialsSchemas.TaxesBase.model_validate(data)
+                    # events = finantialsSchemas.EventsBase.model_validate(data['events'])
+
+                    self.alter_field(last_entry_price=item.v_prod)
+
+
+
+
         pass        
 
         

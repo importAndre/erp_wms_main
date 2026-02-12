@@ -24,7 +24,7 @@ class Product(Base):
     updated_at = Column(TIMESTAMP(timezone=True), server_default=text('now()'))
     created_at = Column(TIMESTAMP(timezone=True), server_default=text('now()')) 
 
-    identificators = relationship("ProductIdentificator", back_populates="product")
+    # identificators = relationship("ProductIdentificator", back_populates="product")
 
 
     __table_args__ = (
@@ -32,15 +32,15 @@ class Product(Base):
     )
 
 
-class ProductIdentificator(Base):
-    __tablename__ = "DimProductIdentificators"
+# class ProductIdentificator(Base):
+#     __tablename__ = "DimProductIdentificators"
 
-    id = Column(Integer, primary_key=True, index=True)
-    product_id = Column(Integer, ForeignKey("DimProducts.id"), nullable=False)
-    code = Column(String, nullable=False)
-    code_type = Column(String, nullable=True)
-    amount = Column(Float, nullable=False, default=1)
-    created_by = Column(Integer, ForeignKey('DimUsers.id'), nullable=False)
-    created_at = Column(TIMESTAMP(timezone=True), server_default=text('now()')) 
+#     id = Column(Integer, primary_key=True, index=True)
+#     product_id = Column(Integer, ForeignKey("DimProducts.id"), nullable=False)
+#     code = Column(String, nullable=False)
+#     code_type = Column(String, nullable=True)
+#     amount = Column(Float, nullable=False, default=1)
+#     created_by = Column(Integer, ForeignKey('DimUsers.id'), nullable=False)
+#     created_at = Column(TIMESTAMP(timezone=True), server_default=text('now()')) 
 
-    product = relationship("Product", back_populates="identificators")
+#     product = relationship("Product", back_populates="identificators")

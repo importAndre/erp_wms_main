@@ -70,6 +70,6 @@ class Payments(BaseModel):
 
 class SupplierPaymentsResponse(BaseModel):
     total: Optional[float] = 0
-    quantity: Optional[int] = 0
+    quantidade_pagamentos: Optional[int] = 0
     notas_pendentes: Optional[int] = 0
     payments: Optional[List[Payments]] = []

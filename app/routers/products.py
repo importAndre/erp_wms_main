@@ -70,6 +70,7 @@ def get_product(
     db: Session = Depends(get_db)
 ):
     prod = productServices.Product(pid=pid, db=db)
+    prod._update_price()
     return prod.get_product(identifs=identificators)
 
 @router.put("/edit", response_model=productSchemas.ProductResponse)

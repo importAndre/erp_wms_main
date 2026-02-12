@@ -75,6 +75,9 @@ def get_supplier(
 @router.get("/payments", response_model=supplierSchemas.SupplierPaymentsResponse)
 def get_payments(
     supplier_id: Optional[int] = None,
+    company_id: Optional[int] = None,
+    date_begin: Optional[str] = None,
+    date_end: Optional[str] = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -86,11 +89,17 @@ def get_payments(
     filter_params = [suppliersModels.SupplierPayments.vencimento >= today]
     if supplier_id is not None:
         filter_params.append(suppliersModels.SupplierPayments.supplier_id == supplier_id)
+    if company_id is not None:
+        filter_params.append(suppliersModels.SupplierPayments.company_id == company_id)
+    if date_begin is not None:
+        filter_params.append(suppliersModels.SupplierPayments.vencimento >= date_begin)
+    if date_end is not None:
+        filter_params.append(suppliersModels.SupplierPayments.vencimento <= date_end)
 
     base_query = db.query(suppliersModels.SupplierPayments).filter(*filter_params)\
             .order_by(suppliersModels.SupplierPayments.vencimento.desc()).all()
     result = supplierSchemas.SupplierPaymentsResponse()
-    result.quantity = len(base_query)
+    result.quantidade_pagamentos = len(base_query)
 
     notas_pendentes = []
     for p in base_query:

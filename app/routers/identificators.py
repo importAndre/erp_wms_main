@@ -18,12 +18,12 @@ router = APIRouter(
 loaded_products = []
 
 @router.post("/create", response_model=identificatorsSchemas.IdentifResponse)
-def create_product(
+def create_identifs(
     identificator: identificatorsSchemas.IdentifCreate,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    user = userServices.User(user=current_user)
+    user = userServices.User(user=current_user, db=db)
     
     new_identif = identificatorsModels.Identificators(
         identif_type=identificator.identif_type,
@@ -33,6 +33,7 @@ def create_product(
         composition_id=identificator.composition_id,
         value=identificator.value
     )   
+    print(new_identif)
 
     db.add(new_identif)
     db.commit()

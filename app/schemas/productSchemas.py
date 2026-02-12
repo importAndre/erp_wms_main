@@ -22,8 +22,9 @@ class ProductAddIdentif(BaseModel):
 
 
 class IdentifResponse(ProductAddIdentif):
-    created_by: Optional[UserResponse] = None
-    created_at: Optional[datetime] = None
+    # created_by: Optional[UserResponse] = None
+    # created_at: Optional[datetime] = None
+    pass
 
 
 class ProductResponse(ProductBase):
@@ -39,6 +40,7 @@ class ProductResponse(ProductBase):
     updated_by: Optional[UserResponse] = None
     updated_at: Optional[datetime] = None
     supplier: Optional[SupplierResponse] = None
+    identificators: Optional[List[IdentifResponse]] = None
 
 class ProductEdit(BaseModel):
     id: int
