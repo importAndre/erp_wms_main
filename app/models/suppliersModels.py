@@ -9,7 +9,7 @@ class Suppliers(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     internal_code = Column(String, nullable=True)
-    cnpj = Column(BigInteger, unique=True, nullable=True)
+    cnpj = Column(String, unique=True, nullable=True)
     razao_social = Column(String, nullable=True)
     nome_fantasia = Column(String, nullable=True)
     data_abertura = Column(String, nullable=True)

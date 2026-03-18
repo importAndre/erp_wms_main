@@ -1,6 +1,8 @@
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Union
 from pydantic import BaseModel
+from .productSchemas import ProductResponse
+from .compositionSchemas import CompositionResponse
 
 class MercadoLivreRegisterClient(BaseModel):
     company_id: int
@@ -99,6 +101,42 @@ class MercadoLivreListing(BaseModel):
         meli_facility: Optional[int] = None
         stock_id: Optional[str] = None
 
+    class TaxesInfos(BaseModel):
+        class FeeDetails(BaseModel):
+            fixed_fee: Optional[float] = None
+            gross_amount: Optional[float] = None
+            percentage_fee: Optional[float] = None
+
+        currency_id: Optional[str ] = None
+        free_relist: Optional[bool] = None
+        listing_exposure: Optional[str] = None
+        listing_fee_amount: Optional[float] = None
+        listing_fee_details: Optional[FeeDetails] = None
+        listing_type_id: Optional[str] = None
+        listing_type_name: Optional[str] = None
+        requires_picture: Optional[bool] = None
+        sale_fee_amount: Optional[float] = None
+        sale_fee_details: Optional[FeeDetails] = None
+        stop_time: Optional[datetime] = None
+
+    class FreightInfos(BaseModel):
+
+        class Coverage(BaseModel):
+            class CountryInfos(BaseModel):
+                class DiscountInfos(BaseModel):
+                    rate: Optional[float] = None
+                    type: Optional[str] = None
+                    promoted_amount: Optional[float] = None
+
+                list_cost: Optional[float] = None
+                currency_id: Optional[str] = None
+                billable_weight: Optional[float] = None
+                discount: Optional[DiscountInfos] = None
+
+            all_country: Optional[CountryInfos]
+        
+        coverage: Optional[Coverage] = None
+
 
     class ListingInfo(BaseModel):
 
@@ -124,11 +162,34 @@ class MercadoLivreListing(BaseModel):
         thumbnail: Optional[str] = None
         status: Optional[str] = None
         pictures: Optional[List[PicturesInfos]] = None
+        package_height: Optional[float] = None
+        package_length: Optional[float] = None
+        package_width: Optional[float] = None
+        package_weight: Optional[float] = None
+        measurements_unit: Optional[str] = None
+        weight_unit: Optional[str] = None
+        free_shipping: Optional[bool] = None
+        freight_cost: Optional[float] = None
+        percentage_discount: Optional[float] = None
+        percentage_fee: Optional[float] = None
+        fixed_fee: Optional[float] = None
+        flex_fee: Optional[float] = None
+        fixed_fee: Optional[float] = None
+        flex_fee: Optional[float] = None
+        liq_revenue: Optional[float] = None
 
 
     listings: Optional[List[ListingInfo]] = None
+    taxes: Optional[TaxesInfos] = None
+    freight: Optional[FreightInfos] = None
     prices: Optional[PricesInfos] = None
     stock: Optional[List[Stocks]] = None
+    new_taxes: Optional[float] = None
+
+
+class MercadoLivreListingResponse(BaseModel):
+    listing: Optional[MercadoLivreListing] = None
+    items: Optional[List[Union[CompositionResponse, ProductResponse]]] = None
 
 
 class MercadoLivreOrder(BaseModel):
@@ -158,3 +219,13 @@ class MercadoLivreOrder(BaseModel):
     shipping_status: Optional[str] = None
     date_created: Optional[str] = None
     installments: Optional[int] = None
+
+
+
+
+class CalculateListing(BaseModel):
+    listing: str
+    company_id: int
+    price: Optional[float] = None
+    sku: Optional[str] = None
+    # desired_margin: Optional[float] = None

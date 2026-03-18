@@ -82,18 +82,32 @@ def add_item(
 
 @router.get("/")
 def get_compositions(
-    current_user=Depends(get_current_user),
+    offset: int = 0,
+    limit: int = 100,
     refresh: Optional[bool] = False,
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-
     global loaded_compositions
+
     if not loaded_compositions or refresh:
+        loaded_compositions = []
         query = db.query(compositionModels.Composition).all()
+
         for comp in query:
-            comp_obj = compositionServices.Composition(cid=comp.id, db=db).get_composition()
-            loaded_compositions.append(comp_obj)
-    return loaded_compositions
-    
+            try:
+                comp_obj = compositionServices.Composition(cid=comp.id, db=db).get_composition()
+                loaded_compositions.append(comp_obj)
+            except AttributeError as e:
+                print("Error in composition:", comp.sku, comp.id)
+
+    return {
+        "total": len(loaded_compositions),
+        "offset": offset,
+        "limit": limit,
+        "items": loaded_compositions[offset:offset + limit]
+    }
+
+
     
         

@@ -22,3 +22,5 @@ class CompanyCreate(CompanyBase):
 
 class CompanyResponse(CompanyBase):
     id: Optional[int] = None
+
+    

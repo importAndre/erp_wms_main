@@ -27,7 +27,14 @@ class ItemResponse(BaseModel):
     product: ProductResponse
     amount_required: int
 
+class IdentifResponse(BaseModel):
+    id: Optional[int] = None
+    composition_id: int
+    code: str
+    code_type: Optional[str] = None
+
 class CompositionResponse(CompositionBase):
+    id: Optional[int] = None
     last_entry_price: Optional[float] = None
     price_after_taxes: Optional[float] = None
     stock_unit_price: Optional[float] = None
@@ -40,3 +47,5 @@ class CompositionResponse(CompositionBase):
     created_at: Optional[datetime] = None
 
     items: Optional[List[ItemResponse]] = None
+    identificators: Optional[List[IdentifResponse]] = None
+

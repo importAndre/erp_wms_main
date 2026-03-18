@@ -22,9 +22,9 @@ class ProductAddIdentif(BaseModel):
 
 
 class IdentifResponse(ProductAddIdentif):
+    id: Optional[int] = None
     # created_by: Optional[UserResponse] = None
     # created_at: Optional[datetime] = None
-    pass
 
 
 class ProductResponse(ProductBase):

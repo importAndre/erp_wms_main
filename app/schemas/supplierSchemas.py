@@ -4,7 +4,7 @@ from datetime import datetime
 
 class SupplierBase(BaseModel):
     internal_code: Optional[str] = None
-    cnpj: Optional[int] = None
+    cnpj: Optional[str] = None
     razao_social: Optional[str] = None
     nome_fantasia: Optional[str] = None
     data_abertura: Optional[str] = None

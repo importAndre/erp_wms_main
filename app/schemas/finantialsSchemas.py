@@ -105,7 +105,7 @@ class InvoiceItemBase(BaseModel):
     v_prod: Optional[float] = None
     ean_trib: Optional[str] = None
     u_trib: Optional[str] = None
-    q_trib: Optional[int] = None
+    q_trib: Optional[float] = None
     v_un_trib: Optional[float] = None
     x_ped: Optional[str] = None
     n_item_ped: Optional[str] = None

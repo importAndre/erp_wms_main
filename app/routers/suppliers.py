@@ -6,7 +6,7 @@ from ..models import suppliersModels
 from ..schemas import supplierSchemas
 from ..database import get_db
 from ..oauth2 import get_current_user
-from ..services import userServices, supplierServices
+from ..services import userServices, supplierServices, companyServices
 from datetime import datetime
 from typing import List, Optional
 from ..server_config import API_URL
@@ -26,6 +26,8 @@ def create_supplier(
 ):
     user = userServices.User(user=current_user, db=db)
     user.check_users_permission(task='create_supplier')
+    supplier.cnpj = supplier.cnpj.replace("/", "").replace("-", '')
+    print(supplier.cnpj)
     
     new_supplier = suppliersModels.Suppliers(
         internal_code=supplier.internal_code,
@@ -235,3 +237,41 @@ def register_payments(
     return result
 
 
+
+@router.get("/product")
+def get_supplier_product(
+    cprod: str,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    url = f"{API_URL}/invoices/product"
+    params = {"cprod": cprod}
+    req = requests.get(url=url, params=params)
+    if req.status_code == 200:
+        return req.json()
+    return {"message": f"{cprod} not found in database."}
+
+
+@router.get("/not-registered")
+def get_not_registered(
+    company_id: Optional[int] = 1,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    company = companyServices.Company(company_id=company_id, db=db).get_company()
+    
+    url = f"{API_URL}/invoices"
+    params = {
+        "cnpj": company.cnpj,
+        "emit": False
+    }
+    req = requests.get(url=url, timeout=30, params=params)
+    if req.status_code == 200:
+        data = req.json()
+        cnpjs = set([str(n['cnpj_emit']) for n in data['invoices']])
+
+        suppliers = db.query(suppliersModels.Suppliers).all()
+        sup = set([str(s.cnpj) for s in suppliers])
+        return cnpjs.difference(sup)
+
+    

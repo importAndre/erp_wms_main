@@ -4,6 +4,7 @@ SERVER_HOST = {
     "evandro_empresa1": "http://192.168.15.20:5051",
     "evandro_empresa2": "http://192.168.15.20:4173",
     "evnadro_local_host": "http://192.168.15.20:5173",
+    "evnado_local_host": "http://192.168.15.20:4174",
 }
 
 API_URL = "http://127.0.0.1:8004"

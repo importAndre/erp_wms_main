@@ -15,6 +15,12 @@ class Identificators(Base):
     value = Column(String, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint('company_id', 'identif_type', 'value', name='uq_comp_itype_value'),
+        UniqueConstraint(
+            'company_id',
+            'identif_type',
+            'value',
+            'product_id',
+            name='uq_comp_itype_value_product'
+        ),
     )
 

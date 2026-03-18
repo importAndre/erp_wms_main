@@ -59,57 +59,57 @@ def get_invoices(
         data = req.json()
         return data
 
-@router.get("/resume")
-def generate_resume(
-    current_user=Depends(get_current_user),
-    date_begin: Optional[str] = None,
-    date_end: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    user = userServices.User(user=current_user, db=db)
-    companies = user.companies
+# @router.get("/resume")
+# def generate_resume(
+#     current_user=Depends(get_current_user),
+#     date_begin: Optional[str] = None,
+#     date_end: Optional[str] = None,
+#     db: Session = Depends(get_db)
+# ):
+#     user = userServices.User(user=current_user, db=db)
+#     companies = user.companies
 
-    if not date_begin or not date_end:
-        date_begin, date_end = get_dates()
+#     if not date_begin or not date_end:
+#         date_begin, date_end = get_dates()
 
-    final_result = []
-    for comp in companies:
-        result = finantialsSchemas.FinantialsResume(
-            company=comp
-        )
-        result.dividas = process_dividas(company_id=comp.id, date_begin=date_begin, date_end=date_end, current_user=current_user, db=db)
+#     final_result = []
+#     for comp in companies:
+#         result = finantialsSchemas.FinantialsResume(
+#             company=comp
+#         )
+#         result.dividas = process_dividas(company_id=comp.id, date_begin=date_begin, date_end=date_end, current_user=current_user, db=db)
 
-        sales_info = finantialsSchemas.salesInfo()
-        buy_infos = finantialsSchemas.buyInfos()
+#         sales_info = finantialsSchemas.salesInfo()
+#         buy_infos = finantialsSchemas.buyInfos()
 
-        vendas_req = get_invoices(cnpj=comp.cnpj, date_begin=date_begin, date_end=date_end, emit=True)
-        compras_req = get_invoices(cnpj=comp.cnpj, date_begin=date_begin, date_end=date_end)
-        # print(json.dumps(vendas_req, indent=4))
+#         vendas_req = get_invoices(cnpj=comp.cnpj, date_begin=date_begin, date_end=date_end, emit=True)
+#         compras_req = get_invoices(cnpj=comp.cnpj, date_begin=date_begin, date_end=date_end)
+#         # print(json.dumps(vendas_req, indent=4))
 
-        vendas = finantialsSchemas.InvoicesReq.model_validate(vendas_req)
-        # print(vendas)
-        sales_info.total = sum([item.v_nf for item in vendas.invoices])
-        compras = finantialsSchemas.InvoicesReq.model_validate(compras_req)
-        buy_infos.total = sum([item.v_nf for item in compras.invoices])
+#         vendas = finantialsSchemas.InvoicesReq.model_validate(vendas_req)
+#         # print(vendas)
+#         sales_info.total = sum([item.v_nf for item in vendas.invoices])
+#         compras = finantialsSchemas.InvoicesReq.model_validate(compras_req)
+#         buy_infos.total = sum([item.v_nf for item in compras.invoices])
             
 
-        result.vendas = sales_info
-        result.compras = buy_infos
+#         result.vendas = sales_info
+#         result.compras = buy_infos
 
 
-        final_result.append(result)
+#         final_result.append(result)
 
-    return final_result
+#     return final_result
 
 
-def get_dates():
-    now = datetime.now()
-    start_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    last_day = monthrange(now.year, now.month)[1]
-    end_month = now.replace(day=last_day, hour=23, minute=59, second=59, microsecond=999999)
-    date_begin = start_month.strftime("%Y-%m-%d %H:%M:%S")
-    date_end = end_month.strftime("%Y-%m-%d %H:%M:%S")
-    return date_begin, date_end
+# def get_dates():
+#     now = datetime.now()
+#     start_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+#     last_day = monthrange(now.year, now.month)[1]
+#     end_month = now.replace(day=last_day, hour=23, minute=59, second=59, microsecond=999999)
+#     date_begin = start_month.strftime("%Y-%m-%d %H:%M:%S")
+#     date_end = end_month.strftime("%Y-%m-%d %H:%M:%S")
+#     return date_begin, date_end
 
 
 def process_dividas(

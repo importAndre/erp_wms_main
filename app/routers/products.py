@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from ..models import productModels
+from ..models import productModels, compositionModels, identificatorsModels
 from ..schemas import productSchemas
 from ..database import get_db
 from ..oauth2 import get_current_user
-from ..services import userServices, productServices
+from ..services import userServices, productServices, compositionServices
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Union
 
 router = APIRouter(
     prefix="/products",
@@ -46,18 +46,37 @@ def create_product(
     loaded_products.append(prod)
     return prod
 
-@router.get("/", response_model=List[productSchemas.ProductResponse])
+
+PROCESSING = False
+PROCESSED = 0
+
+@router.get("/", response_model=Union[List[productSchemas.ProductResponse], Dict])
 def get_products(
     current_user=Depends(get_current_user),
     refresh: Optional[bool] = False,
     db: Session = Depends(get_db)
 ):
     global loaded_products
+    global PROCESSING, PROCESSED
     if not loaded_products or refresh:
         query = db.query(productModels.Product).all()
+        total = len(query)
         loaded_products = []
+        if PROCESSING:
+            return {
+                "message": f"Please await",
+                "values": {
+                    "processed": PROCESSED,
+                    "total": total,
+                    "percentage": (PROCESSED / total) * 100
+                }
+                }
         for item in query:
-            loaded_products.append(productServices.Product(product=item, db=db).get_product())
+            PROCESSING = True
+            loaded_products.append(productServices.Product(product=item, db=db).get_product(refresh=refresh))
+            PROCESSED += 1
+        PROCESSING = False
+        PROCESSED = 0
     return loaded_products
 
 
@@ -65,13 +84,11 @@ def get_products(
 @router.get("/pid/{pid}", response_model=productSchemas.ProductResponse)
 def get_product(
     pid: int,
-    identificators: Optional[bool] = False,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     prod = productServices.Product(pid=pid, db=db)
-    prod._update_price()
-    return prod.get_product(identifs=identificators)
+    return prod.get_product(refresh=True)
 
 @router.put("/edit", response_model=productSchemas.ProductResponse)
 def edit_product(
@@ -98,31 +115,44 @@ def edit_product(
     return productServices.Product(product=db_product, db=db).get_product()
 
 
-@router.post("/identificator")
-def add_identif(
-    product: productSchemas.ProductAddIdentif,
+
+@router.get("/search/{sku}")
+def search_by_sku(
+    sku: str,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    
-    query = db.query(productModels.ProductIdentificator)\
-            .filter(productModels.ProductIdentificator.product_id == product.product_id)\
-            .filter(productModels.ProductIdentificator.code == product.code)\
-            .filter(productModels.ProductIdentificator.code_type == product.code_type)\
-            .filter(productModels.ProductIdentificator.amount == product.amount).first()
-    if query:
-        return productServices.Product(product=query.product, db=db).get_product()
+    product_query = db.query(productModels.Product).filter(productModels.Product.sku == sku).first()
+    if product_query:
+        prod_obj = productServices.Product(product=product_query, db=db)
+        # prod_obj._update_price()
+        return prod_obj.get_product(refresh=True)
+    composition_query = db.query(compositionModels.Composition).filter(compositionModels.Composition.sku == sku).first()
+    if composition_query:
+        comp_obj = compositionServices.Composition(cid=composition_query.id, db=db)
+        # comp_obj.get_comp_entries()
+        return comp_obj.get_composition(refresh=True)
+    return {"message": f"Product {sku} not found"}
 
-    new_identif = productModels.ProductIdentificator(
-        product_id=product.product_id,
-        code=product.code,
-        code_type=product.code_type,
-        amount=product.amount,
-        created_by=current_user.id,
-        created_at=datetime.now()
-    )
 
-    db.add(new_identif)
-    db.commit()
-    db.refresh(new_identif)
-    return productServices.Product(product=new_identif.product, db=db).get_product()
+
+from sqlalchemy import exists
+
+@router.get("/not-identif")
+def get_not_identifs(
+    company_id: Optional[int] = 1,
+    db: Session = Depends(get_db)
+):
+    products = db.query(productModels.Product).filter(
+        productModels.Product.company_id == company_id,
+        ~exists().where(
+            identificatorsModels.Identificators.product_id == productModels.Product.id
+        ).where(
+            identificatorsModels.Identificators.identif_type == 'supplier_code'
+        )
+    ).all()
+
+    return {
+        "total": len(products),
+        "products": products
+    }
