@@ -1,4 +1,5 @@
 from ..models.accountModels import Employee as EmployeeModel
+from ..models.accountModels import EmployeePayroll, EmployeePayrollItem
 from ..schemas import employeesSchemas
 from sqlalchemy.orm import Session
 from ..database import get_db
@@ -28,6 +29,8 @@ class Employee:
         self.is_active = None
         self.company_id = None
         self.user_id = None
+        self.db = db
+        self.payroll = []
         
 
     def _load_employee(self):
@@ -40,19 +43,31 @@ class Employee:
                 setattr(self, column.name, getattr(query, column.name))
 
     def get_employee(self, refresh=False):
-        if refresh:
+        if refresh or not self.id:
             self._load_employee()
         return employeesSchemas.EmployeeResponse(
             first_name=self.first_name,
             last_name=self.last_name,
             email=self.email,
             phone_number=self.phone_number,
+            cpf=self.cpf,
             position=self.position,
             department=self.department,
             hire_date=self.hire_date,
             salary=self.salary,
+            cbo=self.cbo,
+            pis=self.pis,
+            ctps=self.ctps,
+            serie=self.serie,
             is_active=self.is_active,
             company_id=self.company_id,
             user_id=self.user_id,
             id=self.emp_id
         )
+    
+    def get_payroll(self):
+        payroll = self.db.query(EmployeePayroll).filter(EmployeePayroll.employee_id == self.emp_id).all()
+        self.payroll = []
+        for item in payroll:
+            self.payroll.append({"payment": item, "items": item.items})
+        return self.payroll
