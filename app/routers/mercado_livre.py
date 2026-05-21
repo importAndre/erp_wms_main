@@ -1,6 +1,6 @@
 import datetime
-from fastapi import APIRouter, Depends, HTTPException
-from ..schemas import mercadoLivreSchemas
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from ..schemas import mercadoLivreSchemas, productSchemas, compositionSchemas
 from ..oauth2 import get_current_user
 from ..server_config import API_URL
 import requests
@@ -10,6 +10,9 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..services import mercadoLivreServices
 from copy import deepcopy
+from ..models import productModels, stockModels
+from .products import search_by_sku
+from tqdm import tqdm
 
 router = APIRouter(
     prefix="/mercado-livre",
@@ -31,7 +34,6 @@ def register_client(
     if req.status_code == 200:
         return req.json()
 
-
 @router.get("/me", response_model=mercadoLivreSchemas.MercadoLivreUser)
 def get_account(
     company_id: Optional[int] = None,
@@ -44,7 +46,6 @@ def get_account(
 
     acc = mercadoLivreServices.Account(cid=company_id)
     return acc.get_account()
-
 
 @router.get("/listings")
 def get_listings(
@@ -71,18 +72,16 @@ def get_listings(
 
     return result
     
-
-
 @router.get("/listing/{listing}", response_model=mercadoLivreSchemas.MercadoLivreListingResponse)
 def get_listing(
     listing: str,
     company_id: int,
+    refresh = False,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> mercadoLivreSchemas.MercadoLivreListingResponse:
     lis = mercadoLivreServices.MercadoLivreListing(listing=listing, cid=company_id, db=db, current_user=current_user)
-    return lis.get_listing()
-    
+    return lis.get_listing(refresh=refresh)
     
 @router.get("/order/{order_id}", response_model=Union[mercadoLivreSchemas.MercadoLivreOrder, List[mercadoLivreSchemas.MercadoLivreOrder]])
 def get_order(
@@ -113,8 +112,6 @@ def get_orders(
         # return data
         return [mercadoLivreSchemas.MercadoLivreOrder.model_validate(d) for d in data]
     
-
-
 @router.get("/infos")
 def get_infos(
     company_id: int,
@@ -243,9 +240,6 @@ def create_listing_dict(listing, product):
     result = calculate_taxes(price=listing.price, revenue=listing.liq_revenue, cmv=product.price_after_taxes, dict_to_update=result)
     return result
 
-
-
-
 def calculate_taxes(price, revenue, cmv, dict_to_update):
     icms_saida = price * 18 / 100
     pis_saida = (price - icms_saida) * 1.65 / 100
@@ -272,3 +266,83 @@ def calculate_new_taxes(price: float, listing: str, sku: str, company_id: int):
     if req.status_code == 200:
         data = req.json()
         return data
+    
+@router.get("/update-virtual-stock")
+def update_virtual_stock(
+    company_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)        
+):
+    url = f"{API_URL}/mercado-livre/listings/full-stock"
+    params = {
+        "company_id": company_id,
+        "date": "2026-03-31"
+    }
+    req = requests.get(url=url, params=params)
+    if req.status_code == 200:
+        data = req.json()
+        # print(data)
+        result = {}
+        pbar = tqdm(total=len(data), position=0, leave=True, desc='Updating Stock')
+        for item in data:
+            prod = search_by_sku(sku=item, db=db)
+            if isinstance(prod, productSchemas.ProductResponse):
+                if prod.id not in result:
+                    result[prod.id] = {'stock': data[item]['stock'], "created_at": data[item]['date']}
+                else:
+                    # print(result[prod.id]['stock'])
+                    # print(data[item]['stock'])
+                    result[prod.id]['stock'] += data[item]['stock']
+            elif isinstance(prod, compositionSchemas.CompositionResponse):
+                for p in prod.items:
+                    if p.product.id not in result:
+                        result[p.product.id] = {"stock": p.amount_required * data[item]['stock'], "created_at": data[item]['date']}
+                    else:
+                        result[p.product.id]['stock'] += p.amount_required * data[item]['stock']
+            pbar.update(1)
+
+    register_full_virtuals(data=result, db=db)
+    return result
+
+
+def register_full_virtuals(
+        data: dict,
+        db: Session = Depends(get_db)        
+    ):
+    pbar = tqdm(total=len(data), position=0, leave=True, desc='Registering Stock')
+    for item in data:
+        model = stockModels.VirtualStockMovements(
+            product_id=item,
+            quantity=data[item]['stock'],
+            location="ml_fulfillment",
+            created_at=data[item]['created_at']
+        )
+        db.add(model)
+        db.commit()
+        db.refresh(model)
+        pbar.update(1)
+
+
+
+
+
+@router.post("/billing")
+def upload_invoice_xml(
+    company_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    url = f"{API_URL}/mercado-livre/client/billing?company_id={company_id}"  # endpoint da primeira função
+
+    req = requests.post(
+        url,
+        files={
+            "file": (
+                file.filename,
+                file.file,  # envia o stream direto
+                file.content_type or "application/xml",
+            )
+        }
+    )
+
+    return req.json()

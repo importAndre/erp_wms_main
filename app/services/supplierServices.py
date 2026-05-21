@@ -1,5 +1,5 @@
 from typing import Optional
-from ..models import suppliersModels
+from ..models import suppliersModels, productModels
 from ..schemas import supplierSchemas
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ class Supplier:
         self._supplier = supplier
         self.db = db
         self._load_supplier()
+        self.products = supplierSchemas.SupplierProductsResponse()
 
     def _load_supplier(self):
         if self._supplier:
@@ -82,3 +83,24 @@ class Supplier:
             opcao_pelo_simples=s.opcao_pelo_simples,
             inscricao_estadual=s.inscricao_estadual
         )
+
+
+    def get_supplier_products(self) -> supplierSchemas.SupplierProductsResponse:
+        from .productServices import Product
+
+        self.products = supplierSchemas.SupplierProductsResponse()
+        self.products.supplier = self.get_supplier()
+
+        products = self.db.query(productModels.Product).filter(
+            productModels.Product.supplier_id == self.sid
+        ).all()
+
+        self.products.distinct_products = len(products)
+
+        for p in products:
+            product = Product(product=p, db=self.db).get_product()
+            self.products.products.append(product)
+            self.products.total_stock_value += product.stock_value or 0
+            self.products.total_units += product.stock or 0
+
+        return self.products

@@ -2,13 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 import requests
 from sqlalchemy.orm import Session
 from sqlalchemy import func, distinct
-from ..models import suppliersModels
-from ..schemas import supplierSchemas
+from ..models import suppliersModels, identificatorsModels
+from ..schemas import supplierSchemas, finantialsSchemas
 from ..database import get_db
 from ..oauth2 import get_current_user
-from ..services import userServices, supplierServices, companyServices
+from ..services import userServices, supplierServices, companyServices, productServices, compositionServices
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 from ..server_config import API_URL
 
 
@@ -188,12 +188,20 @@ def register_payments(
                 )
 
                 if exists:
+                    print("exists", nf.numero_nota)
                     updated = False
                     if exists.quantidade_parcelas != quantidade_parcelas:
                         exists.quantidade_parcelas = quantidade_parcelas
                         updated = True
                     if supplier and exists.supplier_id != supplier.id:
                         exists.supplier_id = supplier.id
+                        updated = True
+                    if not exists.numero_nota:
+                        exists.numero_nota = nf.numero_nota
+                        updated = True
+                    if not exists.date_emit:
+                        print("here", nf.date_emit)
+                        exists.date_emit = nf.date_emit
                         updated = True
                     if updated:
                         db.add(exists)
@@ -215,14 +223,17 @@ def register_payments(
                     except ValueError:
                         valor_float = None
 
+                # print("not exists", nf.numero_nota)
                 new_entry = suppliersModels.SupplierPayments(
                     company_id=comp.id,
                     supplier_id=supplier.id,
                     chave_acesso=nf.chave_acesso,
+                    numero_nota=nf.numero_nota,
                     parcela=parcela_int,
                     quantidade_parcelas=quantidade_parcelas,
                     valor=valor_float,
                     vencimento=vencimento_dt,
+                    date_emit=nf.date_emit
                 )
                 db.add(new_entry)
                 inserted += 1
@@ -252,26 +263,244 @@ def get_supplier_product(
     return {"message": f"{cprod} not found in database."}
 
 
+NOT_REGISTERED = None
+
 @router.get("/not-registered")
 def get_not_registered(
     company_id: Optional[int] = 1,
+    refresh: Optional[bool] = False,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
+    global NOT_REGISTERED
+    if not refresh and NOT_REGISTERED:
+        return NOT_REGISTERED
+
     company = companyServices.Company(company_id=company_id, db=db).get_company()
-    
+
+    def get_registered_supplier_codes(company_id: int):
+        params = [
+            identificatorsModels.Identificators.company_id == company_id,
+            identificatorsModels.Identificators.identif_type == "supplier_code",
+        ]
+        identifs = db.query(identificatorsModels.Identificators).filter(*params).all()
+
+        registered_supplier_codes = set()
+
+        for ident in identifs:
+            try:
+                if ident.is_composition:
+                    comp = compositionServices.Composition(
+                        cid=ident.composition_id,
+                        db=db
+                    ).get_composition()
+
+                    if (
+                        comp
+                        and comp.items
+                        and comp.items[0].product
+                        and comp.items[0].product.supplier
+                        and comp.items[0].product.supplier.cnpj
+                    ):
+                        cnpj = comp.items[0].product.supplier.cnpj
+                        registered_supplier_codes.add((cnpj, ident.value))
+
+                else:
+                    prod = productServices.Product(
+                        pid=ident.product_id,
+                        db=db
+                    ).get_product()
+
+                    if prod and prod.supplier and prod.supplier.cnpj:
+                        cnpj = prod.supplier.cnpj
+                        registered_supplier_codes.add((cnpj, ident.value))
+            except Exception:
+                # se quiser, pode logar aqui
+                continue
+
+        return registered_supplier_codes
+
+    def get_registered_purchases(company_id: int):
+        purchases = (
+            db.query(suppliersModels.Purchases)
+            .filter(suppliersModels.Purchases.company_id == company_id)
+            .all()
+        )
+
+        registered_purchases = set()
+
+        for p in purchases:
+            # TROQUE p.c_prod pelo nome real do campo na sua tabela Purchases
+            # Ex.: p.product_code, p.supplier_code, etc.
+            c_prod = getattr(p, "c_prod", None)
+
+            if p.seller_cnpj and c_prod and p.invoice_id:
+                registered_purchases.add((p.seller_cnpj, c_prod, p.invoice_id))
+
+        return registered_purchases
+
     url = f"{API_URL}/invoices"
     params = {
         "cnpj": company.cnpj,
         "emit": False
     }
+
     req = requests.get(url=url, timeout=30, params=params)
+
+    if req.status_code != 200:
+        return {
+            "error": "Não foi possível consultar as notas",
+            "status_code": req.status_code
+        }
+
+    registered_supplier_codes = get_registered_supplier_codes(company_id=company_id)
+    registered_purchases = get_registered_purchases(company_id=company_id)
+
+    data = req.json()
+    result = []
+
+    for item in data.get("invoices", []):
+        invoice = finantialsSchemas.InvoiceBase.model_validate(item)
+
+        invoice_id = invoice.id
+        seller_cnpj = invoice.cnpj_emit
+
+        if not seller_cnpj or not invoice.items:
+            continue
+
+        missing_items = []
+
+        for inv_item in invoice.items:
+            c_prod = inv_item.c_prod
+
+            if not c_prod:
+                continue
+
+            has_supplier_code = (seller_cnpj, c_prod) in registered_supplier_codes
+            has_purchase = (seller_cnpj, c_prod, invoice_id) in registered_purchases
+
+            if not has_supplier_code or not has_purchase:
+                missing_items.append({
+                    "invoice_id": invoice_id,
+                    "numero": invoice.numero,
+                    "serie": invoice.serie,
+                    "cnpj_emit": seller_cnpj,
+                    "c_prod": c_prod,
+                    "x_prod": inv_item.x_prod,
+                    "supplier_code_registered": has_supplier_code,
+                    "purchase_registered": has_purchase,
+                })
+
+        if missing_items:
+            result.append({
+                "invoice_id": invoice_id,
+                "numero": invoice.numero,
+                "serie": invoice.serie,
+                "cnpj_emit": seller_cnpj,
+                "dh_emissao": invoice.dh_emissao,
+                "items_not_registered": missing_items
+            })
+
+    NOT_REGISTERED = result
+    print(len(result))
+    return result
+    
+    
+
+@router.post("/register-purchase", response_model=supplierSchemas.PurchaseResponse)
+def register_purchase(
+    purchase: supplierSchemas.PurchaseCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    company = companyServices.Company(company_id=purchase.company_id, db=db).get_company()
+    url = f"{API_URL}/invoices/product"
+    params = {
+        "cprod": purchase.c_prod,
+        "supplier_cnpj": purchase.seller_cnpj,
+        "buyer_cnpj": company.cnpj,
+        "numero": purchase.numero_nota
+        }
+    req = requests.get(url=url, params=params)
     if req.status_code == 200:
         data = req.json()
-        cnpjs = set([str(n['cnpj_emit']) for n in data['invoices']])
-
-        suppliers = db.query(suppliersModels.Suppliers).all()
-        sup = set([str(s.cnpj) for s in suppliers])
-        return cnpjs.difference(sup)
-
+        # return data
+        invoice = finantialsSchemas.InvoiceBase.model_validate(data['invoice'])
+        item = finantialsSchemas.InvoiceItemBase.model_validate(data['item'])
     
+        new_purchase = suppliersModels.Purchases(
+            company_id=purchase.company_id,
+            user_id=current_user.id,
+            invoice_id=invoice.id,
+            category=purchase.category,
+            asset_name=purchase.asset_name,
+            c_prod=purchase.c_prod,
+            seller_cnpj=purchase.seller_cnpj,
+            quantity=item.q_com,
+            unit_value=item.v_un_com,
+            total_value=item.v_prod,
+            purchase_date=invoice.dh_emissao
+        )
+        db.add(new_purchase)
+        db.commit()
+        db.refresh(new_purchase)
+        return new_purchase
+
+
+
+    return {"message": f"{purchase.cprod} not found in database."}
+
+from datetime import datetime, date, time
+from typing import Optional, List
+from fastapi import Depends, Query
+from sqlalchemy.orm import Session
+
+
+@router.get("/purchases", response_model=List[supplierSchemas.PurchaseResponse])
+def get_purchases(
+    company_id: int,
+    date_begin: Optional[date] = Query(None),
+    date_end: Optional[date] = Query(None),
+    category: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user)
+):
+    query = db.query(suppliersModels.Purchases).filter(
+        suppliersModels.Purchases.company_id == company_id
+    )
+
+    if date_begin:
+        date_begin_datetime = datetime.combine(date_begin, time.min)
+
+        query = query.filter(
+            suppliersModels.Purchases.purchase_date >= date_begin_datetime
+        )
+
+    if date_end:
+        date_end_datetime = datetime.combine(date_end, time.max)
+
+        query = query.filter(
+            suppliersModels.Purchases.purchase_date <= date_end_datetime
+        )
+
+    if category:
+        query = query.filter(
+            suppliersModels.Purchases.category == category
+        )
+
+    purchases = query.order_by(
+        suppliersModels.Purchases.purchase_date.desc()
+    ).all()
+
+    return purchases
+
+@router.get("/stock-value", response_model=Union[supplierSchemas.SupplierProductsResponse, List[supplierSchemas.SupplierProductsResponse]])
+def get_stock_value(
+    supplier_id: Optional[int] = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if supplier_id:
+        return supplierServices.Supplier(sid=supplier_id, db=db).get_supplier_products()
+    query = db.query(suppliersModels.Suppliers).all()
+    return [supplierServices.Supplier(sid=item.id, db=db).get_supplier_products() for item in query]

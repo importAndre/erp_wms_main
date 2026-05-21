@@ -27,6 +27,7 @@ class StockMovement(Base):
     address_id = Column(Integer, ForeignKey("DimAddresses.id"), nullable=False)
     method = Column(Boolean, nullable=False)
     quantity = Column(Integer, nullable=False, default=1)
+    product_id = Column(Integer, ForeignKey("DimProducts.id"), nullable=False)
     motive = Column(String, nullable=True)
     motive_link = Column(Integer, nullable=True)
     created_by = Column(Integer, ForeignKey("DimUsers.id"), nullable=False)
@@ -42,3 +43,14 @@ class AddressProducts(Base):
     quantity = Column(Integer, nullable=False, default=0)
     updated_at = Column(TIMESTAMP(timezone=True), server_default='now()')
     
+
+
+
+class VirtualStockMovements(Base):
+    __tablename__ = "FactVirtualStockMovements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("DimProducts.id"), nullable=False)
+    quantity = Column(Integer, nullable=False, default=0)
+    location = Column(String, nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default='now()')

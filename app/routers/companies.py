@@ -4,6 +4,8 @@ from ..models.accountModels import Company
 from ..schemas import companySchemas
 from ..database import get_db
 from ..services import companyServices
+from ..oauth2 import get_current_user
+
 
 router = APIRouter(
     prefix="/company",
@@ -13,12 +15,13 @@ router = APIRouter(
 @router.post("/register", response_model=companySchemas.CompanyResponse)
 def register_company(
     company: companySchemas.CompanyCreate,
+    current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> companySchemas.CompanyResponse:
     
     existing = db.query(Company).filter(Company.cnpj == company.cnpj).first()
     if existing:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Existing CNPJ")
         
     new_company = Company(
         cnpj=company.cnpj,
@@ -39,4 +42,4 @@ def register_company(
     db.commit()
     db.refresh(new_company)
 
-    return companyServices.Company(company_id=new_company.id, db=db)
+    return companyServices.Company(company_id=new_company.id, db=db).get_company()

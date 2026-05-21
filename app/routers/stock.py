@@ -58,15 +58,18 @@ def create_stock_movement(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    print(current_user)
     new_move = stockModels.StockMovement(
         address_id=movement.address_id,
         method=movement.method,
         quantity=movement.quantity,
         motive=movement.motive,
+        product_id=movement.product_id,
         motive_link=movement.motive_link,
         created_by=current_user.id,
-        created_at=datetime.now(),
+        created_at=movement.created_at if movement.created_at else datetime.now(),
     )
+
     db.add(new_move)
     db.commit()
     db.refresh(new_move)
@@ -75,9 +78,7 @@ def create_stock_movement(
     address.stock_move(movement=movement)
 
     product = productServices.Product(pid=movement.product_id, db=db)
-    aval_qt = product.available_stock
-    if not aval_qt:
-        aval_qt = 0
+    aval_qt = product.available_stock or 0
 
     if not movement.method:
         alter_qt = aval_qt - movement.quantity

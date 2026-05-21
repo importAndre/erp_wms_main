@@ -58,7 +58,8 @@ class MercadoLivreListing:
         params = {
             "company_id": self.cid,
             "prices": True,
-            "stock": True
+            "stock": True,
+            "update": True
         }
 
         if self.listing_id in loaded_listings and not refresh:
@@ -98,8 +99,8 @@ class MercadoLivreListing:
             self.listing_product.append(
                 search_by_sku(
                     sku=lis.sku,
-                    db=self.db,
-                    current_user=self.current_user
+                    db=self.db
+                    # current_user=self.current_user
                 )
             )
 

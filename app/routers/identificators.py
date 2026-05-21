@@ -45,7 +45,6 @@ def create_identifs(
         composition_id=identificator.composition_id,
         value=identificator.value
     )   
-    print(new_identif)
 
     db.add(new_identif)
     db.commit()
@@ -53,7 +52,7 @@ def create_identifs(
 
     return new_identif
 
-@router.get("/get/{value}")
+@router.get("/get")
 def get_identif(
     value: str,
     current_user=Depends(get_current_user),

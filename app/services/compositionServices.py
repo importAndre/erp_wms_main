@@ -8,6 +8,7 @@ from .productServices import Product
 from .userServices import User
 import requests
 from ..server_config import API_URL
+from math import floor
 
 compositions = {}
 
@@ -83,9 +84,9 @@ class Composition:
             virtuals.append((p.product.virtual_stock or 0) / p.amount_required)
             availables.append((p.product.available_stock or 0) / p.amount_required)
 
-        self.stock = min(stocks) if stocks else 0
-        self.virtual_stock = min(virtuals) if virtuals else 0
-        self.available_stock = min(availables) if availables else 0
+        self.stock = floor(min(stocks)) if stocks else 0
+        self.virtual_stock = floor(min(virtuals)) if virtuals else 0
+        self.available_stock = floor(min(availables)) if availables else 0
 
         comp.last_entry_price = self.last_entry_price
         comp.price_after_taxes = self.price_after_taxes
@@ -105,7 +106,7 @@ class Composition:
     def get_composition(self, refresh=False):
         if self.last_entry_price is None or refresh:
             self._load_composition(refresh=refresh)
-        # print("sku", self.sku, "created_by", self.created_by, "updated_by", self.updated_by)
+        # print("sku", self.sku, "stock", self.stock, "virtual_stock", self.virtual_stock)
         return compositionSchemas.CompositionResponse(
             id=self.cid,
             company_id=self.company_id,
@@ -159,15 +160,21 @@ class Composition:
                         dh_emit = invoice.dh_emissao
 
                     new_dh_emit  = invoice.dh_emissao
+                    icms = 0
+                    ipi = 0
                     if new_dh_emit >= dh_emit:
                         for item in taxes.taxes:
                             if item.item_id != item_inv.id:
                                 continue
                             if item.tax == 'ICMS':
+                                if not item.p_aliq:
+                                    item.p_aliq = 0
                                 icms = price * (item.p_aliq / 100)
                                 # print("v_icms", self.v_icms)
                             
                             elif item.tax == 'IPI':
+                                if not item.p_aliq:
+                                    item.p_aliq = 0
                                 ipi = price * (item.p_aliq / 100)
                             st = 0
 

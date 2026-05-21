@@ -25,6 +25,11 @@ def create_product(
 ):
     user = userServices.User(user=current_user, db=db)
     user.check_users_permission(task='create_product')
+
+    query = db.query(productModels.Product).filter(productModels.Product.company_id == product.company_id)\
+            .filter(productModels.Product.sku == product.sku).first()
+    if query:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="SKU already registered")
     
     new_product = productModels.Product(
         company_id=product.company_id,
@@ -81,13 +86,19 @@ def get_products(
 
 
 
-@router.get("/pid/{pid}", response_model=productSchemas.ProductResponse)
+@router.get("/pid/{pid}", response_model=Union[productSchemas.ProductResponse, productSchemas.ProductAddressResponse])
 def get_product(
     pid: int,
+    address: Optional[bool] = False,
+    date: Optional[datetime] = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     prod = productServices.Product(pid=pid, db=db)
+    if address:
+        return prod.get_addresses()
+    if date:
+        return prod.get_product_date(date=date)
     return prod.get_product(refresh=True)
 
 @router.put("/edit", response_model=productSchemas.ProductResponse)
@@ -119,19 +130,20 @@ def edit_product(
 @router.get("/search/{sku}")
 def search_by_sku(
     sku: str,
-    current_user=Depends(get_current_user),
+    refresh: Optional[bool] = True,
+    # current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     product_query = db.query(productModels.Product).filter(productModels.Product.sku == sku).first()
     if product_query:
         prod_obj = productServices.Product(product=product_query, db=db)
         # prod_obj._update_price()
-        return prod_obj.get_product(refresh=True)
+        return prod_obj.get_product(refresh=refresh)
     composition_query = db.query(compositionModels.Composition).filter(compositionModels.Composition.sku == sku).first()
     if composition_query:
         comp_obj = compositionServices.Composition(cid=composition_query.id, db=db)
         # comp_obj.get_comp_entries()
-        return comp_obj.get_composition(refresh=True)
+        return comp_obj.get_composition(refresh=refresh)
     return {"message": f"Product {sku} not found"}
 
 
@@ -156,3 +168,16 @@ def get_not_identifs(
         "total": len(products),
         "products": products
     }
+
+
+@router.get("/stock-date")
+def get_product_date(
+    pid: int,
+    date: datetime,
+    db: Session = Depends(get_db)
+):
+    prod = productServices.Product(pid=pid, db=db)
+    prod_response = prod.get_product()
+    old_quantity = prod.get_product_date(date=date)
+
+    return old_quantity

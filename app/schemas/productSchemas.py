@@ -1,8 +1,11 @@
-from pydantic import BaseModel
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 from .userSchemas import UserResponse
 from .supplierSchemas import SupplierResponse
+
 
 class ProductBase(BaseModel):
     company_id: int
@@ -10,9 +13,11 @@ class ProductBase(BaseModel):
     name: str
     picture: Optional[str] = None
     supplier_id: Optional[int] = None
-    
+
+
 class ProductCreate(ProductBase):
     pass
+
 
 class ProductAddIdentif(BaseModel):
     product_id: int
@@ -23,8 +28,6 @@ class ProductAddIdentif(BaseModel):
 
 class IdentifResponse(ProductAddIdentif):
     id: Optional[int] = None
-    # created_by: Optional[UserResponse] = None
-    # created_at: Optional[datetime] = None
 
 
 class ProductResponse(ProductBase):
@@ -35,6 +38,13 @@ class ProductResponse(ProductBase):
     stock: Optional[int] = None
     virtual_stock: Optional[int] = None
     available_stock: Optional[int] = None
+    last_entry: Optional[datetime] = None
+    last_sell: Optional[datetime] = None
+    stock_value: Optional[float] = None
+    amount_sold: Optional[float] = None
+    cmv: Optional[float] = None
+    revenue: Optional[float] = None
+    profit: Optional[float] = None
     created_by: Optional[UserResponse] = None
     created_at: Optional[datetime] = None
     updated_by: Optional[UserResponse] = None
@@ -42,9 +52,20 @@ class ProductResponse(ProductBase):
     supplier: Optional[SupplierResponse] = None
     identificators: Optional[List[IdentifResponse]] = None
 
+
 class ProductEdit(BaseModel):
     id: int
     company_id: Optional[int] = None
     sku: Optional[str] = None
     name: Optional[str] = None
     picture: Optional[str] = None
+
+
+from .stockSchemas import AddressResponse
+class AddressProduct(AddressResponse):
+    quantity: Optional[int] = None
+
+
+class ProductAddressResponse(BaseModel):
+    product: Optional[ProductResponse] = None
+    addresses: List[AddressProduct] = Field(default_factory=list)

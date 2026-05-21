@@ -1,8 +1,13 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from __future__ import annotations
+
+from pydantic import BaseModel, Field
+from typing import Optional, List, TYPE_CHECKING
 from datetime import datetime
 from .userSchemas import UserResponse
-from.productSchemas import ProductResponse
+
+if TYPE_CHECKING:
+    from .productSchemas import ProductResponse
+
 
 class AddressBase(BaseModel):
     warehouse: str
@@ -21,17 +26,21 @@ class AddressBase(BaseModel):
 class AddressCreate(AddressBase):
     pass
 
+
 class AddressResponse(AddressBase):
     id: int
     full_address: str
 
+
 class AddressItemResponse(BaseModel):
-    product: ProductResponse
+    product: "ProductResponse"
     quantity: int
+
 
 class AddressProductsResponse(BaseModel):
     address: AddressResponse
-    products: List[AddressItemResponse]
+    products: List[AddressItemResponse] = Field(default_factory=list)
+
 
 class StockMovementBase(BaseModel):
     address_id: int
@@ -40,11 +49,21 @@ class StockMovementBase(BaseModel):
     quantity: int
     motive: Optional[str] = None
     motive_link: Optional[str] = None
+    created_at: Optional[datetime] = None
+
 
 class StockMovementCreate(StockMovementBase):
     pass
+
 
 class StockMovementResponse(StockMovementBase):
     id: int
     created_by: UserResponse
     created_at: datetime
+
+
+
+from .productSchemas import ProductResponse
+
+AddressItemResponse.model_rebuild()
+AddressProductsResponse.model_rebuild()

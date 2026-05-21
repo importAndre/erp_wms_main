@@ -23,7 +23,7 @@ pers = {
 
 }
 
-@router.get("/{per}")
+@router.get("/")
 def get_per(
     per: Optional[str] = None
 ):

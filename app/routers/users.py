@@ -105,35 +105,35 @@ def alter_permission(
 
 
 
-@router.get("/main")
-def load_main_page(
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    user = userServices.User(user=current_user, db=db)
-    if user.get_user().is_superuser:
-        return load_super_user_main_page(user=user, db=db, current_user=current_user)
+# @router.get("/main")
+# def load_main_page(
+#     current_user=Depends(get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     user = userServices.User(user=current_user, db=db)
+#     if user.get_user().is_superuser:
+#         return load_super_user_main_page(user=user, db=db, current_user=current_user)
 
 
 
 
-def load_super_user_main_page(
-    user: userServices.User,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # from .mercado_livre import get_infos
+# def load_super_user_main_page(
+#     user: userServices.User,
+#     current_user=Depends(get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     # from .mercado_livre import get_infos
     
-    # infos = {}
-    # for c in user.get_companies():
-    #     infos[c.nome_fantasia] = get_infos(
-    #         company_id=c.id,
-    #         date_begin="2026-01-01",
-    #         current_user=user
-    #     )
+#     # infos = {}
+#     # for c in user.get_companies():
+#     #     infos[c.nome_fantasia] = get_infos(
+#     #         company_id=c.id,
+#     #         date_begin="2026-01-01",
+#     #         current_user=user
+#     #     )
 
-    # return infos
-    return userSchemas.SuperUserMainPage()
+#     # return infos
+#     return userSchemas.SuperUserMainPage()
 
 
 def load_user_main_page(

@@ -6,7 +6,7 @@ from .server_config import SERVER_HOST
 
 from app.routers.users import router as user_router
 from app.routers.companies import router as company_router
-from app.routers.products import router as product_router
+from app.routers.products import router as product_router 
 from app.routers.compositions import router as comp_router
 from app.routers.employees import router as employees_router
 from app.routers.identificators import router as identifs_router

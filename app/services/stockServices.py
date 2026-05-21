@@ -33,16 +33,22 @@ class Address:
 
     def _load_address(self):
         if self.address:
-            return
-        if not self.add_id:
-            raise AttributeError("Addres id required")
-        
-        query = self.db.query(stockModels.Address)\
+            query = self.address
+        else:
+            if not self.add_id:
+                raise AttributeError("Address id required")
+
+            query = self.db.query(stockModels.Address)\
                 .filter(stockModels.Address.id == self.add_id).first()
-        if not query:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Address not found')
-        
-        self.address = query
+
+            if not query:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Address not found"
+                )
+
+            self.address = query
+
         self.warehouse = query.warehouse
         self.block = query.block
         self.street = query.street
@@ -59,7 +65,7 @@ class Address:
 
     def get_address(self, refresh=False):
         if not hasattr(self, "warehouse") or self.warehouse is None or refresh:
-            self._load_address
+            self._load_address()
         return stockSchemas.AddressResponse(
             warehouse=self.warehouse,
             block=self.block,
@@ -104,11 +110,27 @@ class Address:
             if movement.method:
                 query.quantity += movement.quantity
             else:
+                if query.quantity < movement.quantity:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Insufficient stock at address"
+                    )
                 query.quantity -= movement.quantity
+                if query.quantity == 0:
+                    self.db.delete(query)
+                    self.db.commit()
+                    return {"detail": "Stock movement completed and address product removed"}
+
             
             self.db.commit()
 
         else:
+            if not movement.method:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Product not found at address for stock removal"
+                )
+
             new_product = stockModels.AddressProducts(
                 address_id=movement.address_id,
                 product_id=movement.product_id,
@@ -117,7 +139,6 @@ class Address:
             )
             self.db.add(new_product)
             self.db.commit()
-            self.db.refresh(new_product)
 
 
             

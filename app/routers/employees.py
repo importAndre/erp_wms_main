@@ -20,14 +20,18 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-@router.get("/")
+@router.get("/", response_model=Union[employeesSchemas.EmployeeResponse, List[employeesSchemas.EmployeeResponse]])
 def get_employees(
+    emp_id: Optional[int] = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if not current_user.is_superuser:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission Denied")
-    return db.query(accountModels.Employee).all()
+    if not emp_id:
+        employees = db.query(accountModels.Employee).all()
+        return [employeeServices.Employee(emp_id=emp.id, db=db).get_employee() for emp in employees]
+    return employeeServices.Employee(emp_id=emp_id, db=db).get_employee()
 
 
 @router.post("/register")
@@ -61,99 +65,85 @@ def register_employee(
     return new_employee
 
 
-@router.get("/search/{emp_id}", response_model=Union[employeesSchemas.EmployeeResponse, List[employeesSchemas.EmployeeResponse]])
-def get_employee(
-    emp_id: Optional[int] = None,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db)
-) -> Union[employeesSchemas.EmployeeResponse, List[employeesSchemas.EmployeeResponse]]:
+# @router.post("/register-payroll", response_model=employeesSchemas.EmployeePayrollResponse)
+# def register_payroll(
+#     infos: employeesSchemas.EmployeePayrollCreate,
+#     current_user=Depends(get_current_user),
+#     db: Session = Depends(get_db)
+# ):
+#     if not current_user.is_superuser:
+#         raise HTTPException(
+#             status_code=status.HTTP_403_FORBIDDEN,
+#             detail="Permission Denied"
+#         )
 
-    if not emp_id:
-        employees = db.query(accountModels.Employee).all()
-        return [employeeServices.Employee(emp_id=emp.id, db=db).get_employee() for emp in employees]
-    return employeeServices.Employee(emp_id=emp_id, db=db).get_employee()
+#     emp = db.query(accountModels.Employee).filter(
+#         accountModels.Employee.id == infos.employee_id
+#     ).first()
 
+#     if not emp:
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND,
+#             detail="Funcionário não encontrado"
+#         )
 
+#     try:
+#         payroll = accountModels.EmployeePayroll(
+#             employee_id=infos.employee_id,
+#             company_id=infos.company_id,
+#             ano_referencia=infos.ano_referencia,
+#             mes_referencia=infos.mes_referencia,
+#             data_competencia=infos.data_competencia,
+#             data_vencimento=infos.data_vencimento,
+#             data_pagamento=infos.data_pagamento,
+#             salario_base=infos.salario_base or 0,
+#             horas_mensais=infos.horas_mensais or 0,
+#             base_inss=infos.base_inss or 0,
+#             valor_inss=infos.valor_inss or 0,
+#             base_fgts=infos.base_fgts or 0,
+#             valor_fgts=infos.valor_fgts or 0,
+#             base_irrf=infos.base_irrf or 0,
+#             valor_irrf=infos.valor_irrf or 0,
+#             base_rais=infos.base_rais or 0,
+#             base_salario_familia=infos.base_salario_familia or 0,
+#             total_proventos=infos.total_proventos or 0,
+#             total_descontos=infos.total_descontos or 0,
+#             salario_liquido=infos.salario_liquido or 0,
+#             status=infos.status or "pendente",
+#             paid=infos.paid if infos.paid is not None else False,
+#             observacoes=infos.observacoes
+#         )
 
-@router.post("/register-payroll", response_model=employeesSchemas.EmployeePayrollResponse)
-def register_payroll(
-    infos: employeesSchemas.EmployeePayrollCreate,
-    current_user=Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if not current_user.is_superuser:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Permission Denied"
-        )
+#         for item in infos.items:
+#             payroll.items.append(
+#                 accountModels.EmployeePayrollItem(
+#                     codigo=item.codigo,
+#                     descricao=item.descricao,
+#                     tipo=item.tipo,
+#                     referencia=item.referencia or 0,
+#                     valor=item.valor,
+#                 )
+#             )
 
-    emp = db.query(accountModels.Employee).filter(
-        accountModels.Employee.id == infos.employee_id
-    ).first()
+#         db.add(payroll)
+#         db.commit()
+#         db.refresh(payroll)
 
-    if not emp:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Funcionário não encontrado"
-        )
+#         result = db.query(accountModels.EmployeePayroll).options(
+#             joinedload(accountModels.EmployeePayroll.employee),
+#             joinedload(accountModels.EmployeePayroll.items)
+#         ).filter(
+#             accountModels.EmployeePayroll.id == payroll.id
+#         ).first()
 
-    try:
-        payroll = accountModels.EmployeePayroll(
-            employee_id=infos.employee_id,
-            company_id=infos.company_id,
-            ano_referencia=infos.ano_referencia,
-            mes_referencia=infos.mes_referencia,
-            data_competencia=infos.data_competencia,
-            data_vencimento=infos.data_vencimento,
-            data_pagamento=infos.data_pagamento,
-            salario_base=infos.salario_base or 0,
-            horas_mensais=infos.horas_mensais or 0,
-            base_inss=infos.base_inss or 0,
-            valor_inss=infos.valor_inss or 0,
-            base_fgts=infos.base_fgts or 0,
-            valor_fgts=infos.valor_fgts or 0,
-            base_irrf=infos.base_irrf or 0,
-            valor_irrf=infos.valor_irrf or 0,
-            base_rais=infos.base_rais or 0,
-            base_salario_familia=infos.base_salario_familia or 0,
-            total_proventos=infos.total_proventos or 0,
-            total_descontos=infos.total_descontos or 0,
-            salario_liquido=infos.salario_liquido or 0,
-            status=infos.status or "pendente",
-            paid=infos.paid if infos.paid is not None else False,
-            observacoes=infos.observacoes
-        )
+#         return result
 
-        for item in infos.items:
-            payroll.items.append(
-                accountModels.EmployeePayrollItem(
-                    codigo=item.codigo,
-                    descricao=item.descricao,
-                    tipo=item.tipo,
-                    referencia=item.referencia or 0,
-                    valor=item.valor,
-                )
-            )
-
-        db.add(payroll)
-        db.commit()
-        db.refresh(payroll)
-
-        result = db.query(accountModels.EmployeePayroll).options(
-            joinedload(accountModels.EmployeePayroll.employee),
-            joinedload(accountModels.EmployeePayroll.items)
-        ).filter(
-            accountModels.EmployeePayroll.id == payroll.id
-        ).first()
-
-        return result
-
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Erro ao registrar folha de pagamento"
-        )
+#     except IntegrityError:
+#         db.rollback()
+#         raise HTTPException(
+#             status_code=status.HTTP_400_BAD_REQUEST,
+#             detail="Erro ao registrar folha de pagamento"
+#         )
     
 
 @router.get("/payroll")
