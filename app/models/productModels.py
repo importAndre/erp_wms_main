@@ -32,6 +32,16 @@ class Product(Base):
     )
 
 
+class ProductHistoricalPrices(Base):
+    __tablename__ = "FactProductsPrices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("DimProducts.id"), nullable=False)
+    last_entry_price = Column(Float, nullable=True)
+    price_after_taxes = Column(Float, nullable=True)
+    stock_unit_price = Column(Float, nullable=True)    
+
+
 # class ProductIdentificator(Base):
 #     __tablename__ = "DimProductIdentificators"
 

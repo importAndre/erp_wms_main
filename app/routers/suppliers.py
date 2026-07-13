@@ -18,6 +18,66 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
+
+def _parse_optional_datetime(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _parse_optional_float(value):
+    if value is None:
+        return None
+    try:
+        return float(str(value).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _get_payment_installments(nf: supplierSchemas.SupplierPaymentsBase):
+    if not nf.pagamentos:
+        return []
+
+    dups = nf.pagamentos.dup or []
+    installments = []
+
+    for dup in dups:
+        if not dup.nDup:
+            continue
+
+        try:
+            parcela = int(dup.nDup)
+        except (TypeError, ValueError):
+            continue
+
+        installments.append({
+            "parcela": parcela,
+            "valor": _parse_optional_float(dup.vDup),
+            "vencimento": _parse_optional_datetime(dup.dVenc),
+        })
+
+    if installments:
+        quantidade_parcelas = len(installments)
+        for installment in installments:
+            installment["quantidade_parcelas"] = quantidade_parcelas
+        return installments
+
+    det_pag = nf.pagamentos.detPag
+    if det_pag and det_pag.indPag == "0":
+        return [{
+            "parcela": 1,
+            "quantidade_parcelas": 1,
+            "valor": _parse_optional_float(det_pag.vPag),
+            "vencimento": nf.date_emit,
+        }]
+
+    return []
+
 @router.post("/create", response_model=supplierSchemas.SupplierResponse)
 def create_supplier(
     supplier: supplierSchemas.SupplierCreate,
@@ -27,7 +87,7 @@ def create_supplier(
     user = userServices.User(user=current_user, db=db)
     user.check_users_permission(task='create_supplier')
     supplier.cnpj = supplier.cnpj.replace("/", "").replace("-", '')
-    print(supplier.cnpj)
+    # print(supplier.cnpj)
     
     new_supplier = suppliersModels.Suppliers(
         internal_code=supplier.internal_code,
@@ -138,6 +198,8 @@ def register_payments(
 
     for comp in companies:
         url = f"{API_URL}/invoices/payments/?cnpj={comp.cnpj}"
+        # params = {"emit": False}
+        # req = requests.get(url=url, timeout=30, params=params)
         req = requests.get(url=url, timeout=30)
 
         if req.status_code != 200:
@@ -149,49 +211,35 @@ def register_payments(
         skipped = 0
 
         for nf in payload.payments:
-            if not nf.pagamentos:
+            installments = _get_payment_installments(nf)
+
+            if not nf.chave_acesso or not installments:
                 continue
 
-            dups = nf.pagamentos.dup or []
-            if isinstance(dups, dict):
-                dups = [dups]
-
-            if not nf.chave_acesso or not dups:
-                continue
-
-            quantidade_parcelas = len(dups)
             cnpj_emit = nf.cnpj_emit
 
             try:
                 supplier = supplierServices.Supplier(cnpj=cnpj_emit, db=db).get_supplier()
             except AttributeError:
-                print(f"CNPJ not found: {cnpj_emit}")
+                # print(f"CNPJ not found: {cnpj_emit}")
                 continue
 
-            for dup in dups:
-                if not dup.nDup:
-                    continue
-
-                try:
-                    parcela_int = int(dup.nDup)
-                except (TypeError, ValueError):
-                    continue
-
+            for installment in installments:
                 exists = (
                     db.query(suppliersModels.SupplierPayments)
                     .filter(
                         suppliersModels.SupplierPayments.company_id == comp.id,
                         suppliersModels.SupplierPayments.chave_acesso == nf.chave_acesso,
-                        suppliersModels.SupplierPayments.parcela == parcela_int,
+                        suppliersModels.SupplierPayments.parcela == installment["parcela"],
                     )
                     .first()
                 )
 
                 if exists:
-                    print("exists", nf.numero_nota)
+                    # print("exists", nf.numero_nota)
                     updated = False
-                    if exists.quantidade_parcelas != quantidade_parcelas:
-                        exists.quantidade_parcelas = quantidade_parcelas
+                    if exists.quantidade_parcelas != installment["quantidade_parcelas"]:
+                        exists.quantidade_parcelas = installment["quantidade_parcelas"]
                         updated = True
                     if supplier and exists.supplier_id != supplier.id:
                         exists.supplier_id = supplier.id
@@ -200,7 +248,7 @@ def register_payments(
                         exists.numero_nota = nf.numero_nota
                         updated = True
                     if not exists.date_emit:
-                        print("here", nf.date_emit)
+                        # print("here", nf.date_emit)
                         exists.date_emit = nf.date_emit
                         updated = True
                     if updated:
@@ -209,30 +257,16 @@ def register_payments(
                     skipped += 1
                     continue
 
-                vencimento_dt = None
-                if dup.dVenc:
-                    try:
-                        vencimento_dt = datetime.fromisoformat(dup.dVenc)
-                    except ValueError:
-                        vencimento_dt = None
-
-                valor_float = None
-                if dup.vDup is not None:
-                    try:
-                        valor_float = float(str(dup.vDup).replace(",", "."))
-                    except ValueError:
-                        valor_float = None
-
                 # print("not exists", nf.numero_nota)
                 new_entry = suppliersModels.SupplierPayments(
                     company_id=comp.id,
                     supplier_id=supplier.id,
                     chave_acesso=nf.chave_acesso,
                     numero_nota=nf.numero_nota,
-                    parcela=parcela_int,
-                    quantidade_parcelas=quantidade_parcelas,
-                    valor=valor_float,
-                    vencimento=vencimento_dt,
+                    parcela=installment["parcela"],
+                    quantidade_parcelas=installment["quantidade_parcelas"],
+                    valor=installment["valor"],
+                    vencimento=installment["vencimento"],
                     date_emit=nf.date_emit
                 )
                 db.add(new_entry)

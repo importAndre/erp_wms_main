@@ -8,8 +8,8 @@ dotenv.load_dotenv()
 
 engine = create_engine(
     os.getenv('SQLALCHEMY_DATABASE_URL'),
-    pool_size=20,
-    max_overflow=40,
+    pool_size=40,
+    max_overflow=80,
     pool_timeout=60,
     pool_recycle=1800
     )

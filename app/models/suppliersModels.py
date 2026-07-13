@@ -27,6 +27,13 @@ class Suppliers(Base):
 class SupplierPayments(Base):
     __tablename__ = 'FactSupplierPayments'
 
+    transaction_id = Column(
+        Integer,
+        ForeignKey("FactTransactions.id"),
+        nullable=True,
+        index=True
+    )
+
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("DimCompanies.id"), nullable=False)
     supplier_id = Column(Integer, ForeignKey("DimSuppliers.id"), nullable=True)
@@ -37,6 +44,7 @@ class SupplierPayments(Base):
     quantidade_parcelas = Column(Integer, nullable=True)
     valor = Column(Float, nullable=True)
     vencimento = Column(TIMESTAMP(timezone=True), nullable=True)
+    data_pagamento = Column(TIMESTAMP(timezone=True), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("company_id", "chave_acesso", "parcela", name="uq_supplier_payment_company_chave_parcela"),

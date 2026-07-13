@@ -43,9 +43,16 @@ class FatBase(BaseModel):
     vLiq: Optional[str] = None
 
 
+class DetPagBase(BaseModel):
+    indPag: Optional[str] = None
+    tPag: Optional[str] = None
+    vPag: Optional[str] = None
+
+
 class PagamentosBase(BaseModel):
     fat: Optional[FatBase] = None
     dup: List[DupBase] = Field(default_factory=list)
+    detPag: Optional[DetPagBase] = None
 
     @field_validator("dup", mode="before")
     @classmethod

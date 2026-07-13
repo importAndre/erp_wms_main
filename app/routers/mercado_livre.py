@@ -76,7 +76,7 @@ def get_listings(
 def get_listing(
     listing: str,
     company_id: int,
-    refresh = False,
+    refresh:Optional[bool] = False,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ) -> mercadoLivreSchemas.MercadoLivreListingResponse:
@@ -270,19 +270,22 @@ def calculate_new_taxes(price: float, listing: str, sku: str, company_id: int):
 @router.get("/update-virtual-stock")
 def update_virtual_stock(
     company_id: int,
+    # sku: Optional[str] = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)        
 ):
     url = f"{API_URL}/mercado-livre/listings/full-stock"
     params = {
         "company_id": company_id,
-        "date": "2026-03-31"
+        # "date": "2026-03-31"
     }
+    # if sku:
+    #     params["sku"] = sku
     req = requests.get(url=url, params=params)
+    result = {}
     if req.status_code == 200:
         data = req.json()
         # print(data)
-        result = {}
         pbar = tqdm(total=len(data), position=0, leave=True, desc='Updating Stock')
         for item in data:
             prod = search_by_sku(sku=item, db=db)
@@ -321,8 +324,6 @@ def register_full_virtuals(
         db.commit()
         db.refresh(model)
         pbar.update(1)
-
-
 
 
 

@@ -74,8 +74,16 @@ class EmployeePayroll(Base):
     __tablename__ = "FactEmployeePayrolls"
 
     id = Column(Integer, primary_key=True, index=True)
+
     employee_id = Column(Integer, ForeignKey("DimEmployees.id"), nullable=False, index=True)
     company_id = Column(Integer, ForeignKey("DimCompanies.id"), nullable=False, index=True)
+
+    transaction_id = Column(
+        Integer,
+        ForeignKey("FactTransactions.id"),
+        nullable=True,
+        index=True
+    )
 
     ano_referencia = Column(Integer, nullable=False, index=True)
     mes_referencia = Column(Integer, nullable=False, index=True)
@@ -108,11 +116,13 @@ class EmployeePayroll(Base):
     updated_at = Column(DateTime(timezone=True), server_default=text("now()"), onupdate=text("now()"), nullable=False)
 
     employee = relationship("Employee")
-    items = relationship("EmployeePayrollItem", back_populates="payroll", cascade="all, delete-orphan")
+    transaction = relationship("Transactions")
 
-    # __table_args__ = (
-    #     UniqueConstraint("employee_id", "ano_referencia", "mes_referencia", name="uq_payroll_employee_mes"),
-    # )
+    items = relationship(
+        "EmployeePayrollItem",
+        back_populates="payroll",
+        cascade="all, delete-orphan"
+    )
 
 
 class EmployeePayrollItem(Base):

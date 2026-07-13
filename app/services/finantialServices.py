@@ -12,7 +12,8 @@ from .compositionServices import Composition
 from .supplierServices import Supplier
 from .employeeServices import Employee
 import requests
-from typing import Union, List
+from typing import Union, Optional, List
+from sqlalchemy import func, case
 from tqdm import tqdm
 
 
@@ -48,203 +49,14 @@ def get_product(sku: str, db: Session = Depends(get_db)) -> Union[productSchemas
     return None
 
 
-# class PatrominialBalance:
-#     def __init__(
-#         self,
-#         company_id: int,
-#         date_begin: date,
-#         date_end: date,
-#         db: Session = Depends(get_db)
-#     ):
-#         self.company_id = company_id
-#         self.db = db
-
-#         self.date_begin, self.date_end = normalize_period(date_begin, date_end)
-#         self.date_begin_dt = start_of_day(self.date_begin)
-#         self.date_end_dt = end_of_day(self.date_end)
-
-#         self.balance = None
-#         self.company = Company(company_id=company_id, db=db).get_company()
-#         self.ativo_circulante = finantialsSchemas.AtivoCirculante()
-#         self.ativos_nao_circulantes = finantialsSchemas.AtivoNaoCirculante()
-#         self.ativo = finantialsSchemas.Ativo()
-
-    
-#     def _get_full_stocks(self):
-#         url = f"{API_URL}/mercado-livre/listings/full-stock"
-#         params = {
-#             "company_id": self.company.id,
-#             "date": self.date_end
-#         }
-#         req = requests.get(url=url, params=params)
-#         if req.status_code == 200:
-#             data = req.json()
-#             pbar = tqdm(total=len(data), position=0, leave=True, desc='Full Stock', unit='prod')
-#             for item in data:
-#                 prod = get_product(sku=item, db=self.db)
-#                 pbar.update(1)
-#                 if not prod or not prod.last_entry_price:
-#                     # print(f'not price for {item}')
-#                     continue
-#                 self.ativo_circulante.estoque += prod.last_entry_price * data[item]
-
-
-#     def _load_ativos(self):
-
-#         self._get_full_stocks()
-
-#         products = self.db.query(productModels.Product).filter(productModels.Product.company_id == self.company_id).all()
-#         pbar = tqdm(total=len(products), position=0, leave=True, desc='Product Stock', unit='prod')
-#         for p in products:
-#             prod = Product(product=p, db=self.db)
-#             product_info = prod.get_product()
-
-#             if not product_info.last_entry_price:
-#                 pbar.update(1)
-#                 continue
-
-#             stock_at_date = prod.get_product_date(date=self.date_end)
-
-#             self.ativo_circulante.estoque += (
-#                 stock_at_date * product_info.last_entry_price
-#             )
-
-#             pbar.update(1)
-
-
-#         categories = ['estrutura']
-#         imobilizado_query = self.db.query(suppliersModels.Purchases).filter(suppliersModels.Purchases.purchase_date <= self.date_end)\
-#                             .filter(suppliersModels.Purchases.category.in_(categories)).all()
-#         for imo in imobilizado_query:
-#             self.ativos_nao_circulantes.imobilizado += imo.total_value
-#             self.ativos_nao_circulantes.imobilizado_detail.append(
-#                 finantialsSchemas.ImobilizadoDetail(
-#                     item=imo.asset_name,
-#                     value=imo.total_value
-#                 )
-#             )
-
-#         self.ativo.ativos_circulantes = self.ativo_circulante
-#         self.ativo.ativos_nao_circulantes = self.ativos_nao_circulantes
-
-#         self.ativo.total_ativo_circulante = self.ativo_circulante.estoque + self.ativo_circulante.caixa + self.ativo_circulante.aplicacoes + self.ativo_circulante.contas_a_receber + self.ativo_circulante.impostos_a_recuperar + self.ativo_circulante.outros_creditos
-#         self.ativo.total_ativo_nao_circulante = self.ativos_nao_circulantes.aplicacoes_financeiras + self.ativos_nao_circulantes.contas_a_receber + self.ativos_nao_circulantes.impostos_a_recuperar + self.ativos_nao_circulantes.outros_creditos + self.ativos_nao_circulantes.imobilizado + self.ativos_nao_circulantes.intangivel
-
-#         self.ativo.total_ativo = self.ativo.total_ativo_circulante + self.ativo.total_ativo_nao_circulante
-
-
-#     def _load_passivos(self):
-#         passivos_circulante = finantialsSchemas.PassivoCirculante()
-#         passivos_nao_circulante = finantialsSchemas.PassivoNaoCirculante()
-#         passivo = finantialsSchemas.Passivo()
-
-#         base_date = self.date_end
-#         next_year = base_date + timedelta(days=365)
-
-#         supplier_payments = (
-#             self.db.query(suppliersModels.SupplierPayments)
-#             .filter(suppliersModels.SupplierPayments.vencimento > self.date_end)
-#             .filter(suppliersModels.SupplierPayments.date_emit <= self.date_end)
-#         )
-
-#         pbar = tqdm(
-#             total=supplier_payments.count(),
-#             position=0,
-#             leave=True,
-#             desc='Supplier Payments',
-#             unit='sp'
-#         )
-
-#         for sp in supplier_payments:
-#             if not sp.vencimento or not sp.valor:
-#                 pbar.update(1)
-#                 continue
-
-#             vencimento = sp.vencimento.date() if isinstance(sp.vencimento, datetime) else sp.vencimento
-
-#             supplier = Supplier(sid=sp.supplier_id, db=self.db).get_supplier()
-
-#             payment = supplierSchemas.Payments(
-#                 numero_nota=sp.numero_nota,
-#                 parcela=sp.parcela,
-#                 quantidade_parcelas=sp.quantidade_parcelas,
-#                 valor=sp.valor,
-#                 vencimento=sp.vencimento,
-#                 supplier=supplier
-#             )
-
-#             if vencimento >= next_year:
-#                 passivos_nao_circulante.fornecedores += sp.valor
-#                 passivos_nao_circulante.fornecedores_detail.append(payment)
-#             else:
-#                 passivos_circulante.fornecedores += sp.valor
-#                 passivos_circulante.fornecedores_detail.append(payment)
-
-#             pbar.update(1)
-
-#         passivo.passivos_circulantes = passivos_circulante
-#         passivo.passivos_nao_circulantes = passivos_nao_circulante
-
-#         passivo.total_passivo_circulante = (
-#             passivos_circulante.emprestimos_e_financiamentos +
-#             passivos_circulante.arrendamento +
-#             passivos_circulante.fornecedores +
-#             passivos_circulante.outras_obrigacoes
-#         )
-
-#         passivo.total_passivo_nao_circulante = (
-#             passivos_nao_circulante.emprestimos_e_financiamentos +
-#             passivos_nao_circulante.arrendamento +
-#             passivos_nao_circulante.fornecedores +
-#             passivos_nao_circulante.outras_obrigacoes
-#         )
-
-#         passivo.total_passivo = (
-#             passivo.total_passivo_circulante +
-#             passivo.total_passivo_nao_circulante
-#         )
-
-#         self.passivo = passivo
-
-
-#     def _load_patrimonio(self):
-#         details = finantialsSchemas.PatrimonioLiquidoDetalhado()
-#         patrimonio_liquido = finantialsSchemas.PatrimonioLiquido()
-
-
-#         patrimonio_liquido.patrimonio_liquido = 0
-#         patrimonio_liquido.detalhes = details
-
-#         self.patrimonio_liquido = patrimonio_liquido
-
-
-#     def get_balance(self, show_details=False):
-#         if not self.balance:
-#             self._load_ativos()
-#             self._load_passivos()
-#             self._load_patrimonio()
-        
-#         if not show_details:
-#             self.ativo.ativos_circulantes.detalhamento_estoque = None
-#             self.passivo.passivos_circulantes.fornecedores_detail = None
-
-#         self.balance = finantialsSchemas.BalancoPatrimonial(
-#             ativo=self.ativo,
-#             passivo=self.passivo,
-#             patrimonio_liquido=self.patrimonio_liquido
-#         )
-
-#         return self.balance
-
-
-
+historical_products = {}
 
 class PatrimonialBalance:
     def __init__(
         self,
         company_id: int,
         date_begin: date,
-        date_end: date,
+        date_end: Optional[datetime] = None,
         db: Session = Depends(get_db)
     ):
         self.company_id = company_id
@@ -254,7 +66,11 @@ class PatrimonialBalance:
 
         self.date_begin, self.date_end = normalize_period(date_begin, date_end)
         self.date_begin_dt = start_of_day(self.date_begin)
-        self.date_end_dt = end_of_day(self.date_end)
+        if date_end:
+            self.date_end_dt = end_of_day(self.date_end)
+        else:
+            self.date_end_dt = None
+
 
         self.balance = None
         self.company = Company(company_id=company_id, db=db).get_company()
@@ -271,17 +87,67 @@ class PatrimonialBalance:
 
     
     def _load_products(self):
+        global historical_products
+        if self.date_end_dt in historical_products:
+            self.ativo_circulante.detalhamento_estoque = historical_products[self.date_end_dt]
+            for item in historical_products[str(self.date_begin_dt)]:
+                self.ativo_circulante.estoque += item.stock_value
+            return
+
+
         products = self.db.query(productModels.Product).filter(productModels.Product.company_id == self.company_id).all()
         pbar = tqdm(total=len(products), position=0, leave=True, desc='Products', unit='prod')
         for p in products:
-            product = Product(pid=p.id, db=self.db).get_product_date(date=self.date_end_dt)
+            if self.date_begin_dt:
+                product = Product(pid=p.id, db=self.db).get_product_date(date=self.date_end_dt)
+                # if p.sku == '6.ESTIL.PROF.25':
+                #     print(p.sku, p.available_stock, p.virtual_stock)
+                #     print(product.sku, product.available_stock, product.virtual_stock)
+            else:
+                product = Product(pid=p.id, db=self.db).get_product()
+
             self.ativo_circulante.detalhamento_estoque.append(product)
             self.ativo_circulante.estoque += product.stock_value
+            
             pbar.update(1)
+        historical_products[str(self.date_end_dt)] = self.ativo_circulante.detalhamento_estoque
+
+    def _load_transactions(self):
+        filter_params = [
+            finantialsModels.Transactions.transaction_date >= self.date_begin_dt,
+            finantialsModels.Transactions.company_id == self.company_id
+        ]
+
+        if self.date_end_dt:
+            filter_params.append(
+                finantialsModels.Transactions.transaction_date <= self.date_end_dt
+            )
+
+        total = (
+            self.db.query(
+                func.coalesce(
+                    func.sum(
+                        case(
+                            (
+                                finantialsModels.Transactions.method == True,
+                                finantialsModels.Transactions.value
+                            ),
+                            else_=finantialsModels.Transactions.value * -1
+                        )
+                    ),
+                    0
+                )
+            )
+            .filter(*filter_params)
+            .scalar()
+        )
+
+        self.ativo_circulante.caixa = total
 
 
     def _load_ativos(self):
         self._load_products()
+        self._load_transactions()
 
 
         categories = ['estrutura']
@@ -454,9 +320,6 @@ class Dre:
 
         self.cmv_detail = finantialsSchemas.cmv_detail()
 
-
-
-    
     def _convert_month(self):
         begin_date = date(self.year, self.month, 1)
         last_day = monthrange(self.year, self.month)[1]
@@ -464,7 +327,6 @@ class Dre:
 
         return begin_date, end_date
     
-
     def _load_receita(self):
 
         url = f"{API_URL}/invoices"
@@ -524,16 +386,20 @@ class Dre:
                 .filter(finantialsModels.Taxes.reference >= self.date_begin).all()
 
         for t in query:
-            if t.taxes_name == 'icms':
+            if t.taxes_name == 'ICMS':
                 self.deducoes.icms += t.value
-            elif t.taxes_name == 'pis':
-                self.deducoes.pis += t.value
-            elif t.taxes_name == 'cofins':
-                self.deducoes.cofins += t.value
-            elif t.taxes_name == 'difal':
+            if t.taxes_name == 'PIS/COFINS':
+                self.deducoes.pis_cofins += t.value
+            # elif t.taxes_name == 'PIS':
+            #     self.deducoes.pis += t.value
+            # elif t.taxes_name == 'COFINS':
+            #     self.deducoes.cofins += t.value
+            elif t.taxes_name == 'DIFAL':
                 self.deducoes.difal += t.value
-            elif t.taxes_name == 'irrf':
+            elif t.taxes_name == 'IRRF':
                 self.deducoes.irrf += t.value
+            elif t.taxes_name == 'IOF':
+                self.deducoes.iof += t.value
 
     def _get_mercado_livre_infos(self):
         url = f'{API_URL}/mercado-livre/client/billing'
@@ -544,7 +410,6 @@ class Dre:
             "date_begin": self.date_begin,
             "date_end": self.date_end
         }
-        print(params)
         req = requests.get(url=url, params=params)
         nada = [
             'Taxa de parcelamento (equivalente ao acréscimo no preço pago pelo comprador)',
@@ -598,7 +463,6 @@ class Dre:
         costs = {}
         if req.status_code == 200:
             data = req.json()
-            print(len(data))
             for item in data:
                 bill = finantialsSchemas.MercadoLivreBillingItem.model_validate(item)
                 if bill.detalhe not in costs:
@@ -620,7 +484,6 @@ class Dre:
                 elif bill.detalhe in difal:
                     self.deducoes.difal += bill.valor
 
-            # print(costs)
         self._get_tm_costs()
         self._get_shopee_tariffs()
 
@@ -631,6 +494,13 @@ class Dre:
                         .filter(suppliersModels.Purchases.purchase_date <= self.date_end)\
                         .filter(suppliersModels.Purchases.category.in_(gastos)).all()
         self.variaveis.insumos = sum([g.total_value for g in gastos_query])
+        cartao_query = self.db.query(finantialsModels.Transactions)\
+                .filter(finantialsModels.Transactions.transaction_date >= self.date_begin_dt)\
+                .filter(finantialsModels.Transactions.transaction_date <= self.date_end_dt)\
+                .filter(finantialsModels.Transactions.category == 6).all()
+        self.variaveis.cartao_de_credito = sum([c.value for c in cartao_query])
+
+
         self.total_variaveis = 0
         for item in self.variaveis:
             _, v = item
@@ -661,24 +531,34 @@ class Dre:
         )
 
         for item in custos_fixos:
-            if item.name == 'software':
+            if item.name == 'SOFTWARE':
                 self.fixos.software += item.value
-            elif item.name == 'aluguel':
+            elif item.name == 'ALUGUEL':
                 self.fixos.aluguel += item.value
-            elif item.name == 'contabilidade':
+            elif item.name == 'CONTABILIDADE':
                 self.fixos.contabilidade += item.value
-            elif item.name == 'internet':
+            elif item.name == 'INTERNET':
                 self.fixos.internet += item.value
-            elif item.name == 'luz':
+            elif item.name == 'LUZ':
                 self.fixos.luz += item.value
-            elif item.name == 'agua':
+            elif item.name == 'AGUA':
                 self.fixos.agua += item.value
+            else:
+                self.fixos.outros += item.value
 
         for _, v in self.fixos:
             self.total_fixos += v
 
     def _get_investimentos(self):
-        self.total_investimentos = self.investimentos.publicidade
+        # self.total_investimentos = self.investimentos.publicidade
+        query = self.db.query(finantialsModels.Transactions)\
+                .filter(finantialsModels.Transactions.transaction_date >= self.date_begin_dt)\
+                .filter(finantialsModels.Transactions.transaction_date <= self.date_end_dt)\
+                .filter(finantialsModels.Transactions.category == 19).all()
+        for item in query:
+            self.investimentos.publicidade += item.value
+
+        self.total_investimentos = self.investimentos.publicidade = self.investimentos.caixa
 
     def _get_tm_costs(self):
         url = f'{API_URL}/freight'
@@ -721,9 +601,15 @@ class Dre:
                 elif 'Serviço de processamento de pagamentos' in t_costs.descricao:
                     self.deducoes.tarifas += t_costs.valor
                 
+    def _get_distribuicao(self):
+        query = self.db.query(finantialsModels.Transactions)\
+                .filter(finantialsModels.Transactions.transaction_date >= self.date_begin_dt)\
+                .filter(finantialsModels.Transactions.transaction_date <= self.date_end_dt)\
+                .filter(finantialsModels.Transactions.category == 7).all()
+        for item in query:
+            self.dre.distribuicao_lucros += item.value
 
-
-    def get_dre(self, show_details=False):
+    def get_dre(self, show_details =False):
         if not self.dre:
             self._load_receita()
             self._get_variaveis()
@@ -748,6 +634,7 @@ class Dre:
         self.dre.lucro_operacional = self.dre.lucro_bruto - self.dre.total_custos_fixos
         self.dre.total_investimentos = self.total_investimentos
         self.dre.investimentos = self.investimentos
+        self._get_distribuicao()
 
         return self.dre
 
@@ -920,3 +807,47 @@ class CashFlow:
     pass
 
 
+class Bank:
+    def __init__(
+        self, 
+        bank_id: int,
+        db: Session = Depends(get_db)
+        ):
+        self.bank_id = bank_id
+        self.db = db
+        self.bank_name = None
+
+
+    def _load_bank(self):
+        query = self.db.query(finantialsModels.Bank).filter(finantialsModels.Bank.id == self.bank_id).first()
+        self.id = query.id
+        self.company_id = query.company_id 
+        self.bank_name = query.bank_name 
+        self.bank_code = query.bank_code 
+        self.agency = query.agency 
+        self.account_number = query.account_number 
+        self.account_digit = query.account_digit 
+        self.account_type = query.account_type 
+        self.holder_name = query.holder_name 
+        self.holder_document = query.holder_document 
+        self.is_active = query.is_active 
+        self.created_at = query.created_at 
+
+
+    def get_bank(self):
+        if not self.bank_name:
+            self._load_bank()
+        return finantialsSchemas.BankResponse(
+            id=self.id,
+            company_id=self.company_id,
+            bank_name=self.bank_name,
+            bank_code=self.bank_code,
+            agency=self.agency,
+            account_number=self.account_number,
+            account_digit=self.account_digit,
+            account_type=self.account_type,
+            holder_document=self.holder_document,
+            holder_name=self.holder_name,
+            is_active=self.is_active,
+            created_at=self.created_at
+        )

@@ -1,7 +1,7 @@
 from datetime import datetime, date, timedelta
-from fastapi import APIRouter, Depends, UploadFile, File, Query
+from fastapi import APIRouter, Depends, UploadFile, File, Query, HTTPException, status
 from ..schemas import finantialsSchemas, productSchemas, compositionSchemas
-from ..models import finantialsModels, suppliersModels, identificatorsModels
+from ..models import finantialsModels, suppliersModels, identificatorsModels, accountModels
 from ..oauth2 import get_current_user
 from ..server_config import API_URL
 import requests, json
@@ -14,6 +14,8 @@ from calendar import monthrange
 from .suppliers import get_payments
 from .mercado_livre import get_infos
 import pandas as pd
+from io import BytesIO
+from sqlalchemy import or_
 
 router = APIRouter(
     prefix="/finantials",
@@ -81,7 +83,6 @@ def register_payment(
     db.refresh(new_payment)
     return new_payment
 
-
 @router.post("/fixos", response_model=finantialsSchemas.FixosResponse)
 def register_payment(
     payment: finantialsSchemas.FixosCreate,
@@ -100,6 +101,7 @@ def register_payment(
     db.refresh(new_payment)
     return new_payment
 
+last_bp = None
 @router.get("/balance")
 def get_balance(
     company_id: int,
@@ -109,13 +111,19 @@ def get_balance(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    return finantialServices.PatrimonialBalance(
+    global last_bp
+    if not last_bp:
+        last_bp = finantialServices.PatrimonialBalance(
         company_id=company_id,
         date_begin=date_begin,
         date_end=date_end,
         db=db
-    ).get_balance(show_details=show_details)
+        ).get_balance(show_details=show_details)
+    return last_bp
 
+
+
+# last_dre = None
 @router.get("/dre")
 def get_dre(
     company_id: int,
@@ -125,13 +133,15 @@ def get_dre(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    return finantialServices.Dre(
+    # global last_dre
+    # if not last_dre:
+    last_dre = finantialServices.Dre(
         company_id=company_id,
         date_begin=date_begin,
         date_end=date_end,
         db=db
     ).get_dre(show_details=show_details)
-
+    return last_dre
 
 
 @router.get("/fix-stock")
@@ -338,7 +348,7 @@ def register_bank(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)    
 ) -> finantialsSchemas.BankResponse:
-    new_bank = finantialsModels.DimBankAccounts(
+    new_bank = finantialsModels.Bank(
         company_id=bank.company_id,
         bank_name=bank.bank_name,
         bank_code=bank.bank_code,
@@ -356,6 +366,15 @@ def register_bank(
     db.refresh(new_bank)
     return new_bank
 
+
+@router.get("/banks")
+def get_banks(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)   
+):
+    query = db.query(finantialsModels.Bank).all()
+    return query
+    
 
 @router.get("/stock-position")
 def get_stock_position(
@@ -420,3 +439,655 @@ def get_stock_position(
         pass
 
     return pb.ativo_circulante
+
+@router.post("/upload-extract")
+async def register_extract(
+    company_id: int,
+    bank_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    bank = finantialServices.Bank(bank_id=bank_id, db=db).get_bank()
+    company = companyServices.Company(company_id=company_id, db=db).get_company()
+    suppliers = db.query(suppliersModels.Suppliers).all()
+    suppliers_cnpjs = [str(s.cnpj).replace("/", "").replace("-", "") for s in suppliers]
+
+    contents = await file.read()
+    excel = BytesIO(contents)
+
+    models = []
+
+    if bank.bank_name == "Itau":
+        df = pd.read_excel(excel, skiprows=9)
+
+        for _, row in df.iterrows():
+            value = row.get("Valor (R$)")
+
+            if pd.isna(value):
+                continue
+
+            model = finantialsModels.Transactions(
+                company_id=company_id,
+                bank_account_id=bank.id,
+            )
+
+            if value < 0:
+                model.method = False
+                model.value = abs(float(value))
+            else:
+                model.method = True
+                model.value = float(value)
+
+            model.counterparty_name = None if pd.isna(row.get("Lançamento")) else row.get("Lançamento")
+            model.counterparty_document = None if pd.isna(row.get("CPF/CNPJ")) else row.get("CPF/CNPJ")
+            model.destiny = None if pd.isna(row.get("Razão Social")) else row.get("Razão Social")
+            model.transaction_date = row.get("Data")
+            model.source = "itau"
+
+            if str(model.counterparty_name).replace("/", "").replace("-", "") == company.cnpj:
+                model.category = 5
+            elif str(model.counterparty_name).replace("/", "").replace("-", "") in suppliers_cnpjs:
+                model.category = 1
+            
+            
+            db.add(model)
+            db.commit()
+            db.refresh(model)
+
+            models.append(model)
+
+        return models
+    
+    elif bank.bank_name == "Mercado Pago":
+        df = pd.read_csv(
+            excel,
+            skiprows=2,
+            sep=";",
+            decimal=",",
+            thousands=".",
+            dtype={
+                "REFERENCE_ID": str
+            }
+        )
+
+        df.columns = df.columns.str.strip()
+
+
+        for _, row in df.iterrows():
+            reference_id = str(row["REFERENCE_ID"]).strip()
+            transaction_type = str(row["TRANSACTION_TYPE"]).strip()
+            transaction_value = float(row["TRANSACTION_NET_AMOUNT"])
+
+            query = (
+                db.query(finantialsModels.Transactions)
+                .filter(finantialsModels.Transactions.description == transaction_type)
+            )
+
+            category = query.first()
+            if category:
+                category = category.category
+
+            query = query.filter(finantialsModels.Transactions.external_id == reference_id).first()
+
+            if query:
+                continue
+
+            model = finantialsModels.Transactions(
+                company_id=company_id,
+                bank_account_id=bank.id,
+                transaction_date=pd.to_datetime(row["RELEASE_DATE"], dayfirst=True),
+                external_id=reference_id,
+                description=transaction_type,
+                source="mercado_pago"
+            )
+
+            if category:
+                model.category = category
+
+            model.counterparty_name = model.description
+
+            if transaction_value > 0:
+                model.method = True
+                model.value = transaction_value
+            else:
+                model.method = False
+                model.value = transaction_value * -1
+
+            db.add(model)
+
+        db.commit()
+
+
+    elif bank.bank_name == 'Nubank':
+        df = pd.read_csv(excel)
+
+        # models = []
+        for _, row in df.iterrows():
+            query = db.query(finantialsModels.Transactions).filter(finantialsModels.Transactions.external_id == row['Identificador']).first()
+            if query:
+                continue
+            model = finantialsModels.Transactions(
+                company_id=company_id,
+                bank_account_id=bank.id,
+            )
+            model.transaction_date = row['Data']
+            model.external_id = row['Identificador']
+            model.description = row['Descrição']
+            model.counterparty_name = row['Descrição']
+
+            if row['Valor'] > 0:
+                model.method = True
+                model.value = row['Valor']
+            else:
+                model.method = False
+                model.value = row['Valor'] * (-1)
+            db.add(model)
+            db.commit()
+
+
+@router.get("/get-extract")
+def get_extract(
+    company_id: int,
+    bank_id: Optional[int] = None,
+    date_begin: Optional[datetime] = None,
+    date_end: Optional[datetime] = None,
+    db: Session = Depends(get_db)
+):
+    filters = [
+        finantialsModels.Transactions.company_id == company_id
+    ]
+
+    if date_begin:
+        filters.append(
+            finantialsModels.Transactions.transaction_date >= date_begin
+        )
+
+    if date_end:
+        filters.append(
+            finantialsModels.Transactions.transaction_date <= date_end
+        )
+
+    if bank_id is not None:
+        filters.append(
+            finantialsModels.Transactions.bank_account_id == bank_id
+        )
+
+    # filters.append(finantialsModels.Transactions.category.is_(None))
+
+    # filters.append(
+    #     or_(
+    #         finantialsModels.Transactions.category.is_(None),
+    #         finantialsModels.Transactions.category == 2
+    #     )
+    # )
+
+    query = db.query(finantialsModels.Transactions).filter(*filters).order_by(finantialsModels.Transactions.transaction_date.desc()).all()
+
+    return query
+
+
+@router.get("/categories")
+def get_categories(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return db.query(finantialsModels.TransactionCategories).all()
+
+@router.post("/create-categories", response_model=finantialsSchemas.TransactionCategoryResponse)
+def create_category(
+    category: finantialsSchemas.TransactionCategoryCreate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # evita criar categoria duplicada pelo nome
+    exists = db.query(finantialsModels.TransactionCategories).filter(
+        finantialsModels.TransactionCategories.category == category.name
+    ).first()
+
+    if exists:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Categoria já cadastrada"
+        )
+
+    new_category = finantialsModels.TransactionCategories(
+        category=category.name,
+    )
+
+    db.add(new_category)
+    db.commit()
+    db.refresh(new_category)
+
+    return {
+        "id": new_category.id,
+        "name": new_category.category
+    }
+
+
+@router.post("/attribute-payment")
+def attribute_payment(
+    attr: finantialsSchemas.AttributePayment,
+    db: Session = Depends(get_db),
+):
+    print(attr.__dict__)
+    transaction = db.query(finantialsModels.Transactions).filter(
+        finantialsModels.Transactions.id == attr.transaction_id
+    ).first()
+
+    if not transaction:
+        raise HTTPException(
+            status_code=404,
+            detail="Transação não encontrada"
+        )
+
+    if attr.category_id:
+        transaction.category = attr.category_id
+
+    if not transaction.category:
+        db.commit()
+        db.refresh(transaction)
+
+        return {
+            "transaction": transaction,
+            "has_motive": False,
+            "motive": None,
+            "message": "Transação sem categoria atribuída"
+        }
+
+    if attr.item_id:
+        query = None
+
+        if transaction.category == 1:
+            query = db.query(suppliersModels.SupplierPayments).filter(
+                suppliersModels.SupplierPayments.id == attr.item_id
+            ).first()
+
+            if query and hasattr(query, "transaction_id"):
+                query.transaction_id = transaction.id
+                query.data_pagamento = transaction.transaction_date
+
+        elif transaction.category == 2:
+            query = db.query(finantialsModels.Taxes).filter(
+                finantialsModels.Taxes.id == attr.item_id
+            ).first()
+
+            if query:
+                query.transaction_id = transaction.id
+                query.payment_date = transaction.transaction_date
+
+        elif transaction.category == 3:
+            query = db.query(finantialsModels.Fixos).filter(
+                finantialsModels.Fixos.id == attr.item_id
+            ).first()
+
+            if query:
+                query.transaction_id = transaction.id
+
+        elif transaction.category == 4:
+            query = db.query(accountModels.EmployeePayroll).filter(
+                accountModels.EmployeePayroll.id == attr.item_id
+            ).first()
+
+            if query:
+                query.transaction_id = transaction.id
+                query.data_pagamento = transaction.transaction_date
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Categoria inválida"
+            )
+
+        if not query:
+            raise HTTPException(
+                status_code=404,
+                detail="Motivo/item não encontrado para essa categoria"
+            )
+
+        db.commit()
+        db.refresh(transaction)
+        db.refresh(query)
+
+        return {
+            "transaction": transaction,
+            "has_motive": True,
+            "motive": query
+        }
+
+    db.commit()
+    db.refresh(transaction)
+
+    search_result = search_item(
+        transaction=transaction,
+        db=db
+    )
+
+    return {
+        "transaction": transaction,
+        **search_result
+    }
+                
+                
+
+def normalize_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+
+    if isinstance(value, date):
+        return value
+
+    if isinstance(value, str):
+        return datetime.fromisoformat(value).date()
+
+    return value
+
+
+def search_item(
+    transaction: finantialsModels.Transactions,
+    db: Session
+):
+    if not transaction.category:
+        return {
+            "has_motive": False,
+            "motive": None
+        }
+
+    transaction_date = normalize_date(transaction.transaction_date)
+
+    def search_supplier(cnpj: str) -> int:
+        cnpj = cnpj.replace("/", '').replace('-', '') 
+        query = db.query(suppliersModels.Suppliers).filter(suppliersModels.Suppliers.cnpj == cnpj).first()
+        if query:
+            return query.id
+
+    if transaction.category == 1:
+        query = db.query(suppliersModels.SupplierPayments).filter(
+            suppliersModels.SupplierPayments.valor == transaction.value
+        ).filter(
+            suppliersModels.SupplierPayments.company_id == transaction.company_id
+        ).all()
+
+
+        for item in query:
+            item_date = normalize_date(item.vencimento)
+
+            if hasattr(item, "transaction_id") and item.transaction_id == transaction.id:
+                return {
+                    "has_motive": True,
+                    "motive": item
+                }
+
+            if hasattr(item, "transaction_id"):
+                start_date = transaction_date - timedelta(days=3)
+                end_date = transaction_date + timedelta(days=3)
+                if item_date and not item.transaction_id and start_date <= item_date <= end_date:
+                    return {
+                        "has_motive": False,
+                        "motive": item
+                    }
+
+        supplier = search_supplier(cnpj=transaction.counterparty_document)
+        query = db.query(suppliersModels.SupplierPayments).filter(suppliersModels.SupplierPayments.transaction_id.is_(None))\
+                .filter(suppliersModels.SupplierPayments.supplier_id == supplier).all()
+        return {
+            "has_motive": False,
+            "motive": query
+        }
+
+    elif transaction.category == 2:
+        query = db.query(finantialsModels.Taxes).filter(
+            finantialsModels.Taxes.value == transaction.value
+        ).all()
+
+        for item in query:
+            item_date = normalize_date(item.payment_date)
+
+            if item.transaction_id == transaction.id:
+                return {
+                    "has_motive": True,
+                    "motive": item
+                }
+
+            if not item.transaction_id and item_date == transaction_date:
+                return {
+                    "has_motive": False,
+                    "motive": item
+                }
+
+        return {
+            "has_motive": False,
+            "motive": query
+        }
+
+    elif transaction.category == 3:
+        query = db.query(finantialsModels.Fixos).filter(
+            finantialsModels.Fixos.value == transaction.value
+        ).all()
+
+        for item in query:
+            item_date = normalize_date(item.payment_date)
+
+            if item.transaction_id == transaction.id:
+                return {
+                    "has_motive": True,
+                    "motive": item
+                }
+
+            if not item.transaction_id and item_date == transaction_date:
+                return {
+                    "has_motive": False,
+                    "motive": item
+                }
+
+        return {
+            "has_motive": False,
+            "motive": query
+        }
+
+    elif transaction.category == 4:
+        cpf = str(transaction.counterparty_document).replace(".", "").replace("-", "")
+        emp_query = db.query(accountModels.Employee).filter(accountModels.Employee.cpf == cpf).first()
+        query = db.query(accountModels.EmployeePayroll).filter(
+            accountModels.EmployeePayroll.salario_liquido == transaction.value
+        )
+        if emp_query:
+            query = query.filter(accountModels.EmployeePayroll.employee_id == emp_query.id)
+        query = query.all()
+
+        for item in query:
+            item_date = normalize_date(item.data_pagamento)
+            item.items = item.items
+
+            if item.transaction_id == transaction.id:
+                return {
+                    "has_motive": True,
+                    "motive": item
+                }
+
+            if not item.transaction_id and item_date == transaction_date:
+                return {
+                    "has_motive": False,
+                    "motive": item
+                }
+
+        return {
+            "has_motive": False,
+            "motive": query
+        }
+
+    return {
+        "has_motive": False,
+        "motive": []
+    }
+    
+    
+@router.get("/motives/{category_id}")
+def get_motives(
+    category_id: Optional[int] = None,
+    date_begin: Optional[str] = None,
+    date_end: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    if category_id:
+        if category_id == 1:
+            return {
+                "category": "supplier"
+            }
+
+        elif category_id == 2:
+            filter_params = []
+
+            if date_begin:
+                filter_params.append(finantialsModels.Taxes.payment_date >= date_begin)
+
+            if date_end:
+                filter_params.append(finantialsModels.Taxes.payment_date <= date_end)
+
+            query = db.query(finantialsModels.Taxes).filter(*filter_params).all()
+
+
+            return {
+                "category": "taxes",
+                "payments": query
+            }
+
+        elif category_id == 3:
+            filter_params = []
+
+            if date_begin:
+                filter_params.append(finantialsModels.Fixos.payment_date >= date_begin)
+
+            if date_end:
+                filter_params.append(finantialsModels.Fixos.payment_date <= date_end)
+
+            query = db.query(finantialsModels.Fixos).filter(*filter_params).all()
+
+            return {
+                "category": "fixos",
+                "payments": query
+            }
+
+        elif category_id == 4:
+            filter_params = []
+
+            if date_begin:
+                filter_params.append(accountModels.EmployeePayroll.data_vencimento >= date_begin)
+
+            if date_end:
+                filter_params.append(accountModels.EmployeePayroll.data_vencimento <= date_end)
+
+            query = db.query(accountModels.EmployeePayroll).filter(*filter_params).all()
+
+            return {
+                "category": "folha_salarial",
+                "payments": query
+            }
+
+        raise HTTPException(
+            status_code=400,
+            detail="Categoria inválida"
+        )
+
+
+@router.get("/duplicated")
+def get_duplicated_invoices():
+    url = f"{API_URL}/invoices"
+    params = {
+        "cnpj": "43861450000181",
+        "emit": True,
+        "events": True,
+        "date_begin": "2026-06-03"
+    }
+
+    req = requests.get(url=url, timeout=30, params=params)
+
+    if req.status_code != 200:
+        return {
+            "error": True,
+            "status_code": req.status_code,
+            "message": req.text
+        }
+
+    data = req.json()
+
+    result = {}
+
+    for item in data["invoices"]:
+        cpf_dest = item["cnpj_dest"]
+
+        invoice = {
+            "chave": item["chave_acesso"],
+            "valor": item["v_nf"],
+            "numero": item["numero"],
+            "serie": item["serie"],
+            "dh_emit": item["dh_emissao"],
+            "events": item["events"],
+            "duplicated": False
+        }
+
+        if cpf_dest not in result:
+            result[cpf_dest] = []
+
+        result[cpf_dest].append(invoice)
+
+    result_2 = {}
+    chaves = []
+
+    for cpf_dest, notas in result.items():
+        if len(notas) <= 1:
+            continue
+
+        last_value = None
+        serie = None
+        chave = None
+
+        for nota in notas:
+            if last_value is None and serie is None:
+                last_value = nota["valor"]
+                serie = nota["serie"]
+                chave = nota["chave"]
+            else:
+                if last_value == nota["valor"] and serie != nota["serie"]:
+                    nota["duplicated"] = True
+                    chaves.append(chave)
+
+    for cpf, notas in result.items():
+        for nota in notas:
+            if nota["chave"] in chaves:
+                nota["duplicated"] = True
+
+    for cpf, notas in result.items():
+        for nota in notas:
+            if nota["duplicated"]:
+                if cpf not in result_2:
+                    result_2[cpf] = []
+
+                result_2[cpf].append(nota)
+
+    rows = []
+
+    for cpf, notas in result_2.items():
+        for nota in notas:
+            rows.append({
+                "cnpj_dest": cpf,
+                "chave": nota["chave"],
+                "valor": nota["valor"],
+                "numero": nota["numero"],
+                "serie": nota["serie"],
+                "dh_emit": nota["dh_emit"],
+                "duplicated": nota["duplicated"],
+                "events": str(nota["events"])
+            })
+
+    df = pd.DataFrame(rows)
+
+    df.to_excel("duplicated_invoices.xlsx", index=False)
+    # df.to_excel("duplicated_invoices.xlsx", index=False, encoding="utf-8-sig")
+
+    # return {
+    #     "total": len(rows),
+    #     "csv": "duplicated_invoices.csv",
+    #     "data": result_2
+    # }
+
+    return result_2

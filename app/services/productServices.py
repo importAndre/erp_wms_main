@@ -13,6 +13,21 @@ from .companyServices import Company
 
 
 products_cache = {}
+products_date_cache = {}
+
+
+def _date_cache_key(pid: int, date: datetime):
+    if isinstance(date, datetime):
+        date_key = date.isoformat()
+    else:
+        date_key = str(date)
+    return (pid, date_key)
+
+
+def _invalidate_product_date_cache(pid: int):
+    for key in list(products_date_cache.keys()):
+        if key[0] == pid:
+            products_date_cache.pop(key, None)
 
 class Product:
     def __init__(
@@ -20,6 +35,7 @@ class Product:
         product: Optional[productModels.Product] = None,
         pid: Optional[int] = None,
         # sku: Optional[str] = None,
+        load_stock: Optional[bool] = False,
         db: Session = Depends(get_db)
     ):
         self.db = db
@@ -46,6 +62,7 @@ class Product:
         self.last_sell = None
         self.addresses = productSchemas.ProductAddressResponse()
         self.company = None
+        self.load_stock = load_stock
         # if sku:
         #     self.sku = sku
 
@@ -67,7 +84,7 @@ class Product:
         )
 
         # if not self.pid and self.sku:
-        #     query = (
+        #     query = (  
         #         self.db.query(productModels.Product)
         #         .filter(productModels.Product.sku == self.sku)
         #         .first()
@@ -78,9 +95,14 @@ class Product:
             for column in productModels.Product.__table__.columns:
                 setattr(self, column.name, getattr(query, column.name))
             self._load_supplier()
-            self._update_price()
             self.company = Company(company_id=self.company_id, db=self.db).get_company()
-            self._get_last_sell_date()
+            if refresh:
+                self._update_price()
+                self._get_last_sell_date()
+            if self.load_stock:
+                self._update_stock(update_all=True)
+            else:
+                self._update_stock(update_all=False)
 
 
     def get_product(self, refresh=False):
@@ -115,7 +137,8 @@ class Product:
         return data
     
     def invalidade_product_cache(self):
-        products_cache.pop(self.pid, None)        
+        products_cache.pop(self.pid, None)
+        _invalidate_product_date_cache(self.pid)
 
     def _load_supplier(self):
         if not self.supplier_id:
@@ -123,8 +146,7 @@ class Product:
         if not self.supplier:
             self.supplier = Supplier(sid=self.supplier_id, db=self.db).get_supplier()
         return self.supplier
-
-    
+  
     def alter_field(self, **values):
         product = (
             self.db.query(productModels.Product)
@@ -132,19 +154,14 @@ class Product:
         )
         product.update(values)
         product = product.first()
+        # print(product.stock)
         aval_qt = product.available_stock if product.available_stock else 0
         vir_qt = product.virtual_stock if product.virtual_stock else 0
         
         product.stock = aval_qt + vir_qt
-        # print("stooock", product.stock)
+        # print(product.stock)
         self.db.commit()
         self.invalidade_product_cache()
-
-        # # manter o objeto em memória atualizado
-        # for k, v in values.items():
-        #     setattr(self, k, v)
-        # self._load_product(refresh=True)
-
 
     def get_identificators(self):
         query = self.db.query(identificatorsModels.Identificators).filter(identificatorsModels.Identificators.product_id == self.pid).all()
@@ -158,7 +175,74 @@ class Product:
         ) for item in query]
         return self.identifs
 
+    def _update_stock(self, update_all=False):
+        from ..routers.mercado_livre import update_virtual_stock
+        from ..models import compositionModels
+        from ..services import compositionServices
+        def get_full_stock(sku: str, company_id: int) -> int:
+            url = f"{API_URL}/mercado-livre/listings/full-stock"
+            params = {
+                "company_id": company_id,
+                "sku": sku
+            }
+            req = requests.get(url=url, params=params)
+            # print(req)
+            if req.status_code == 200:
+                data = req.json()
+                try:
+                    return data[sku]['stock']
+                except KeyError:
+                    return 0
+            return 0
 
+        def update_virtual():
+            pid_full_stock = 0
+            compositions = self.db.query(compositionModels.CompositionItems).filter(compositionModels.CompositionItems.product_id == self.pid).all()
+            for c in compositions:
+                comp_obj = compositionServices.Composition(cid=c.composition_id, db=self.db).get_composition()
+                full_stock = get_full_stock(sku=comp_obj.sku, company_id=comp_obj.company_id)
+                for p in comp_obj.items:
+                    if p.product.id == self.pid:
+                        pid_full_stock += full_stock * p.amount_required
+
+
+            new_move = stockModels.VirtualStockMovements(
+                product_id=self.id,
+                quantity=pid_full_stock,
+                location='ml_fulfillment',
+                created_at=datetime.now()
+            )
+            self.db.add(new_move)
+            self.db.commit()
+            self.db.refresh(new_move)
+
+            full = self.db.query(stockModels.VirtualStockMovements)\
+                .filter(stockModels.VirtualStockMovements.product_id == self.pid)\
+                .filter(stockModels.VirtualStockMovements.location == 'ml_fulfillment')\
+                .order_by(stockModels.VirtualStockMovements.created_at.desc()).first()
+            
+            if full:
+                self.alter_field(virtual_stock=full.quantity)
+            else:
+                self.alter_field(virtual_stock=0)
+
+        def update_available():
+            query = self.db.query(stockModels.StockMovement).filter(stockModels.StockMovement.product_id == self.pid).all()
+            # print(len(query))
+            stock = 0
+            for item in query:
+                if item.method:
+                    stock += item.quantity
+                else:
+                    stock -= item.quantity
+                # print(item.method, item.quantity, item.created_at, stock)
+            return stock
+
+        aval = update_available()
+        self.alter_field(available_stock=aval)
+
+        if update_all:
+            update_virtual()
 
     def _update_price(self):
         if not self.identifs:
@@ -170,7 +254,6 @@ class Product:
                 req = requests.get(f"{API_URL}/invoices/product", params=params)
                 if req.status_code == 200:
                     data = req.json()
-                    # print(data)
                     if not data:
                         print(f"not data for {self.sku}")
                         return
@@ -201,13 +284,10 @@ class Product:
                                     self.p_icms = 0
                                 self.v_icms = item_inv.v_un_com * (self.p_icms / 100)
                                 self.add_identif(orig=item.orig)
-                                # print("v_icms", self.v_icms)
                             
                             elif item.tax == 'IPI':
                                 self.p_ipi = item.p_aliq
-                                # print("p_pis", self.p_pis)
                                 self.v_ipi = item_inv.v_un_com * (item.p_aliq / 100)
-                                # print("v_pis", self.v_pis)
 
                             cofins = item_inv.v_un_com * 7.6 / 100
                             pis = item_inv.v_un_com * 1.65 / 100
@@ -225,6 +305,7 @@ class Product:
         cost = price - icms - pis - cofins + ipi + st
         self.alter_field(last_entry_price=price)
         self.alter_field(price_after_taxes=cost)
+
 
     def add_identif(
         self, 
@@ -312,35 +393,64 @@ class Product:
 
 
     def get_product_date(self, date: datetime):
+        cache_key = _date_cache_key(self.pid, date)
+        if cache_key in products_date_cache:
+            return products_date_cache[cache_key]
+
         if not self.identifs:
             self.get_identificators()
-        original = self.get_product()
-        if not original.available_stock:
-            print(original.sku, original.available_stock)
-            original.available_stock = 0
+        original = self.get_product(refresh=True)
+        prod_copy = productSchemas.ProductResponse(
+            id=original.id,
+            company_id=original.company_id,
+            sku=original.sku,
+            name=original.name,
+            picture=original.picture,
+            last_entry_price=original.last_entry_price,
+            price_after_taxes=original.price_after_taxes,
+            stock_unit_price=original.stock_unit_price,
+            stock=original.stock,
+            virtual_stock=original.virtual_stock,
+            available_stock=original.available_stock,
+            last_entry=original.last_entry,
+            last_sell=original.last_sell,
+            stock_value=(original.stock or 0) * (self.last_entry_price or 0),
+            created_by=original.created_by,
+            created_at=original.created_at,
+            updated_by=original.updated_by,
+            updated_at=original.updated_at,
+            identificators=original.identificators,
+            supplier=original.supplier
+        )
+        if not prod_copy.available_stock:
+            prod_copy.available_stock = 0
         query = self.db.query(stockModels.StockMovement).filter(stockModels.StockMovement.created_at >= date)\
                 .filter(stockModels.StockMovement.product_id == self.pid).all()
+
+        # if prod_copy.sku == '6.ESTIL.PROF.25':
+        #     print(prod_copy.sku, prod_copy.available_stock)
         for item in query:
             if item.method:
-                original.available_stock -= item.quantity
+                prod_copy.available_stock -= item.quantity
             else:
-                original.available_stock += item.quantity
-            if original.available_stock < 0:
-                original.available_stock = 0
+                prod_copy.available_stock += item.quantity
+            # if prod_copy.sku == '6.ESTIL.PROF.25':
+            #     print(prod_copy.available_stock, item.method, item.quantity)
+            if prod_copy.available_stock < 0:
+                prod_copy.available_stock = 0
 
         virtual_query = self.db.query(stockModels.VirtualStockMovements)\
-                    .filter(stockModels.VirtualStockMovements.product_id == original.id)\
+                    .filter(stockModels.VirtualStockMovements.product_id == prod_copy.id)\
                     .filter(stockModels.VirtualStockMovements.location == 'ml_fulfillment')\
                     .filter(stockModels.VirtualStockMovements.created_at <= date)\
                         .order_by(stockModels.VirtualStockMovements.created_at.desc()).first()
-        # print(virtual_query.quantity, virtual_query.location, virtual_query.created_at)
         
         if virtual_query:
-            original.virtual_stock = virtual_query.quantity
+            prod_copy.virtual_stock = virtual_query.quantity
         else:
-            original.virtual_stock = 0
+            prod_copy.virtual_stock = 0
 
-        original.stock = original.virtual_stock + original.available_stock
+        prod_copy.stock = prod_copy.virtual_stock + prod_copy.available_stock
 
 
         dh_emit = None
@@ -350,7 +460,6 @@ class Product:
                 req = requests.get(f"{API_URL}/invoices/product", params=params)
                 if req.status_code == 200:
                     data = req.json()
-                    # print(data)
                     if not data:
                         continue
 
@@ -368,7 +477,7 @@ class Product:
 
                     new_dh_emit = invoice.dh_emissao
                     if new_dh_emit >= dh_emit:
-                        original.last_entry = new_dh_emit
+                        prod_copy.last_entry = new_dh_emit
                         for item in taxes.taxes:
                             if item.item_id != item_inv.id:
                                 continue
@@ -388,11 +497,12 @@ class Product:
 
                         custo = item_inv.v_un_com - v_icms - pis - cofins + v_ipi + st
 
-                    original.last_entry_price = item_inv.v_un_com
-                    original.price_after_taxes = custo
+                    prod_copy.last_entry_price = item_inv.v_un_com
+                    prod_copy.price_after_taxes = custo
 
-        original.stock_value = original.stock * original.last_entry_price
-        return original
+        prod_copy.stock_value = prod_copy.stock * prod_copy.last_entry_price
+        products_date_cache[cache_key] = prod_copy
+        return prod_copy
     
     def get_addresses(self, refresh=False):
         if not hasattr(self, "company_id") or self.company_id is None:
@@ -435,7 +545,6 @@ class Product:
             if not data:
                 return
             invoice = finantialsSchemas.InvoiceBase.model_validate(data['invoice'])
-            # print(invoice)
             self.last_sell = invoice.dh_emissao
             
 

@@ -95,11 +95,11 @@ class cmv_detail(BaseModel):
     estoque_atual: Optional[float] = 0
 
 class DeducoesDeVenda(BaseModel):
-    pis: Optional[float] = 0
-    cofins: Optional[float] = 0
+    pis_cofins: Optional[float] = 0
     icms: Optional[float] = 0
     difal: Optional[float] = 0
     irrf: Optional[float] = 0
+    iof: Optional[float] = 0
     tarifas: Optional[float] = 0
     comissoes: Optional[float] = 0
     frete: Optional[float] = 0
@@ -121,10 +121,11 @@ class CustosFixos(BaseModel):
     internet: Optional[float] = 0
     luz: Optional[float] = 0
     agua: Optional[float] = 0
+    outros: Optional[float] = 0
 
 class Investimentos(BaseModel):
     publicidade: Optional[float] = 0
-
+    caixa: Optional[float] = 0
 
 
 class DRE(BaseModel):
@@ -141,6 +142,7 @@ class DRE(BaseModel):
     lucro_operacional: Optional[float] = 0
     total_investimentos: Optional[float] = 0
     investimentos: Optional[Investimentos] = None
+    distribuicao_lucros: Optional[float] = 0
 
 
 
@@ -346,3 +348,17 @@ class BankCreate(BankBase):
 
 class BankResponse(BankBase):
     id: Optional[int] = None
+
+
+class AttributePayment(BaseModel):
+    transaction_id: int
+    category_id: Optional[int] = None
+    item_id: Optional[int] = None
+
+
+
+class TransactionCategoryCreate(BaseModel):
+    name: str
+
+class TransactionCategoryResponse(TransactionCategoryCreate):
+    id: int

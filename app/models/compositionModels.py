@@ -9,7 +9,7 @@ class Composition(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("DimCompanies.id"), nullable=False)
     sku = Column(String, nullable=False)
-    name = Column(String, nullable=False)
+    name = Column(String, nullable=True)
     last_entry_price = Column(Float, nullable=True)
     price_after_taxes = Column(Float, nullable=True)
     stock_unit_price = Column(Float, nullable=True)

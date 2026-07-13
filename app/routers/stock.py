@@ -58,7 +58,8 @@ def create_stock_movement(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    print(current_user)
+    user = userServices.User(user=current_user, db=db).get_user()
+    
     new_move = stockModels.StockMovement(
         address_id=movement.address_id,
         method=movement.method,
@@ -66,7 +67,7 @@ def create_stock_movement(
         motive=movement.motive,
         product_id=movement.product_id,
         motive_link=movement.motive_link,
-        created_by=current_user.id,
+        created_by=user.id,
         created_at=movement.created_at if movement.created_at else datetime.now(),
     )
 

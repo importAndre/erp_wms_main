@@ -142,6 +142,7 @@ class MercadoLivreOrder:
         }
 
         req = requests.get(url=url, params=params)
+        print(req)
         if req.status_code == 200:
             data = req.json()
 

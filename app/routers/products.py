@@ -1,12 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from ..models import productModels, compositionModels, identificatorsModels
+from ..models import productModels, compositionModels, identificatorsModels, stockModels
 from ..schemas import productSchemas
 from ..database import get_db
 from ..oauth2 import get_current_user
 from ..services import userServices, productServices, compositionServices
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Union
+import requests
+from ..server_config import API_URL
+
 
 router = APIRouter(
     prefix="/products",
@@ -86,20 +89,28 @@ def get_products(
 
 
 
+
 @router.get("/pid/{pid}", response_model=Union[productSchemas.ProductResponse, productSchemas.ProductAddressResponse])
 def get_product(
     pid: int,
     address: Optional[bool] = False,
     date: Optional[datetime] = None,
+    refresh: Optional[bool] = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    prod = productServices.Product(pid=pid, db=db)
+    if refresh:
+        prod = productServices.Product(pid=pid, db=db, load_stock=False)
+        # prod = productServices.Product(pid=pid, db=db, load_stock=True)
+    else:
+        prod = productServices.Product(pid=pid, db=db, load_stock=False)
+
     if address:
         return prod.get_addresses()
     if date:
         return prod.get_product_date(date=date)
-    return prod.get_product(refresh=True)
+
+    return prod.get_product(refresh=refresh)
 
 @router.put("/edit", response_model=productSchemas.ProductResponse)
 def edit_product(
@@ -177,7 +188,62 @@ def get_product_date(
     db: Session = Depends(get_db)
 ):
     prod = productServices.Product(pid=pid, db=db)
-    prod_response = prod.get_product()
+    # prod_response = prod.get_product()
     old_quantity = prod.get_product_date(date=date)
+    print(old_quantity)
 
     return old_quantity
+
+
+@router.get("/virtual/{pid}")
+def update_virtual_stock(
+    pid: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)    
+):
+    from .mercado_livre import update_virtual_stock
+
+    product = productServices.Product(pid=pid, db=db).get_product()
+    comps = []
+
+    def get_full_stock(sku: str, company_id: int) -> int:
+        url = f"{API_URL}/mercado-livre/listings/full-stock"
+        params = {
+            "company_id": company_id,
+            "sku": sku
+        }
+        req = requests.get(url=url, params=params)
+        if req.status_code == 200:
+            data = req.json()
+            try:
+                return data[sku]['stock']
+            except KeyError:
+                return 0
+        return 0
+
+
+    pid_full_stock = 0
+    compositions = db.query(compositionModels.CompositionItems).filter(compositionModels.CompositionItems.product_id == pid).all()
+    for c in compositions:
+        comp_obj = compositionServices.Composition(cid=c.composition_id, db=db).get_composition()
+        full_stock = get_full_stock(sku=comp_obj.sku, company_id=comp_obj.company_id)
+        for p in comp_obj.items:
+            if p.product.id == pid:
+                pid_full_stock += full_stock * p.amount_required
+                # if full_stock > 0:
+                #     print("comp", comp_obj.sku, 'stock', full_stock, "pid_full_stock", pid_full_stock)
+
+
+    new_move = stockModels.VirtualStockMovements(
+        product_id=product.id,
+        quantity=pid_full_stock,
+        location='ml_fulfillment',
+        created_at=datetime.now()
+    )
+    print(new_move.product_id, new_move.quantity)
+    db.add(new_move)
+    db.commit()
+    db.refresh(new_move)
+    return new_move
+
+

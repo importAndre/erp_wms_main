@@ -11,6 +11,7 @@ import os
 from io import BytesIO
 from PyPDF2 import PdfReader
 import re
+import unicodedata
 from datetime import datetime
 from calendar import monthrange
 
@@ -63,87 +64,6 @@ def register_employee(
     db.refresh(new_employee)
 
     return new_employee
-
-
-# @router.post("/register-payroll", response_model=employeesSchemas.EmployeePayrollResponse)
-# def register_payroll(
-#     infos: employeesSchemas.EmployeePayrollCreate,
-#     current_user=Depends(get_current_user),
-#     db: Session = Depends(get_db)
-# ):
-#     if not current_user.is_superuser:
-#         raise HTTPException(
-#             status_code=status.HTTP_403_FORBIDDEN,
-#             detail="Permission Denied"
-#         )
-
-#     emp = db.query(accountModels.Employee).filter(
-#         accountModels.Employee.id == infos.employee_id
-#     ).first()
-
-#     if not emp:
-#         raise HTTPException(
-#             status_code=status.HTTP_404_NOT_FOUND,
-#             detail="Funcionário não encontrado"
-#         )
-
-#     try:
-#         payroll = accountModels.EmployeePayroll(
-#             employee_id=infos.employee_id,
-#             company_id=infos.company_id,
-#             ano_referencia=infos.ano_referencia,
-#             mes_referencia=infos.mes_referencia,
-#             data_competencia=infos.data_competencia,
-#             data_vencimento=infos.data_vencimento,
-#             data_pagamento=infos.data_pagamento,
-#             salario_base=infos.salario_base or 0,
-#             horas_mensais=infos.horas_mensais or 0,
-#             base_inss=infos.base_inss or 0,
-#             valor_inss=infos.valor_inss or 0,
-#             base_fgts=infos.base_fgts or 0,
-#             valor_fgts=infos.valor_fgts or 0,
-#             base_irrf=infos.base_irrf or 0,
-#             valor_irrf=infos.valor_irrf or 0,
-#             base_rais=infos.base_rais or 0,
-#             base_salario_familia=infos.base_salario_familia or 0,
-#             total_proventos=infos.total_proventos or 0,
-#             total_descontos=infos.total_descontos or 0,
-#             salario_liquido=infos.salario_liquido or 0,
-#             status=infos.status or "pendente",
-#             paid=infos.paid if infos.paid is not None else False,
-#             observacoes=infos.observacoes
-#         )
-
-#         for item in infos.items:
-#             payroll.items.append(
-#                 accountModels.EmployeePayrollItem(
-#                     codigo=item.codigo,
-#                     descricao=item.descricao,
-#                     tipo=item.tipo,
-#                     referencia=item.referencia or 0,
-#                     valor=item.valor,
-#                 )
-#             )
-
-#         db.add(payroll)
-#         db.commit()
-#         db.refresh(payroll)
-
-#         result = db.query(accountModels.EmployeePayroll).options(
-#             joinedload(accountModels.EmployeePayroll.employee),
-#             joinedload(accountModels.EmployeePayroll.items)
-#         ).filter(
-#             accountModels.EmployeePayroll.id == payroll.id
-#         ).first()
-
-#         return result
-
-#     except IntegrityError:
-#         db.rollback()
-#         raise HTTPException(
-#             status_code=status.HTTP_400_BAD_REQUEST,
-#             detail="Erro ao registrar folha de pagamento"
-#         )
     
 
 @router.get("/payroll")
@@ -192,6 +112,16 @@ def only_digits(value: Optional[str]) -> str:
     if not value:
         return ""
     return re.sub(r"\D", "", value)
+
+
+def normalize_name(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(char for char in value if not unicodedata.combining(char))
+    value = re.sub(r"[^A-Za-z0-9\s]", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip().upper()
 
 
 def br_to_float(value: Optional[str]) -> float:
@@ -318,7 +248,7 @@ def split_employee_blocks(text: str) -> List[str]:
         if previd_pos != -1:
             block = block[:previd_pos].strip()
 
-        if "Admissão em" in block and "CPF:" in block:
+        if "Admissão em" in block:
             blocks.append(block)
 
     return blocks
@@ -411,10 +341,43 @@ def extract_items(block: str) -> List[dict]:
     )
 
     if not section_match:
+        section_match = re.search(
+            r"Horas mensais:\s*[\d\.,]+\s+\d+\s*(?P<section>.+?)Total de proventos - >",
+            one_line
+        )
+
+    if not section_match:
         return items
 
     section = section_match.group("section").strip()
     section = section.replace("PROVENTOS REFERÊNCIA VALOR DESCONTOS REFERÊNCIA VALOR", "").strip()
+
+    # Padrão pró-labore: valor + descrição/código + referência desconto + valor desconto + descrição/código
+    payroll_without_reference_matches = re.finditer(
+        r"(?P<valor_prov>\d{1,3}(?:\.\d{3})*,\d{2})\s+"
+        r"(?P<desc_prov>.+?)"
+        r"(?P<codigo_prov>\d{1,6})\s+"
+        r"(?P<ref_desc>\d{1,3},\d{2})\s+"
+        r"(?P<valor_desc>\d{1,3}(?:\.\d{3})*,\d{2})\s+"
+        r"(?P<desc_desc>.+?)"
+        r"(?P<codigo_desc>\d{1,6})(?=\s|$)",
+        section
+    )
+    for match in payroll_without_reference_matches:
+        items.append({
+            "codigo": match.group("codigo_prov"),
+            "descricao": match.group("desc_prov").strip(),
+            "tipo": "provento",
+            "referencia": 0.0,
+            "valor": br_to_float(match.group("valor_prov")),
+        })
+        items.append({
+            "codigo": match.group("codigo_desc"),
+            "descricao": match.group("desc_desc").strip(),
+            "tipo": "desconto",
+            "referencia": br_to_float(match.group("ref_desc")),
+            "valor": br_to_float(match.group("valor_desc")),
+        })
 
     # 1) padrão folha: provento + desconto na mesma linha
     pair_matches = re.finditer(
@@ -605,21 +568,24 @@ async def upload_payroll(
         try:
             parsed = parse_employee_block(block)
             cpf_digits = only_digits(parsed.get("cpf"))
+            employee = None
 
-            if not cpf_digits:
-                skipped.append({
-                    "nome": parsed.get("nome"),
-                    "motivo": "CPF não encontrado no PDF"
-                })
-                continue
+            if cpf_digits:
+                employee = db.query(accountModels.Employee).filter(
+                    accountModels.Employee.cpf == cpf_digits
+                ).first()
 
-            employee = db.query(accountModels.Employee).filter(
-                accountModels.Employee.cpf == cpf_digits
-            ).first()
-
-            if not employee:
+            if cpf_digits and not employee:
                 for emp in all_employees:
                     if only_digits(emp.cpf) == cpf_digits:
+                        employee = emp
+                        break
+
+            if not employee:
+                pdf_name = normalize_name(parsed.get("nome"))
+                for emp in all_employees:
+                    employee_name = normalize_name(f"{emp.first_name or ''} {emp.last_name or ''}")
+                    if employee_name == pdf_name:
                         employee = emp
                         break
 
@@ -627,7 +593,7 @@ async def upload_payroll(
                 skipped.append({
                     "nome": parsed.get("nome"),
                     "cpf": parsed.get("cpf"),
-                    "motivo": "Funcionário não encontrado no banco pelo CPF"
+                    "motivo": "Funcionário não encontrado no banco pelo CPF ou nome"
                 })
                 continue
 
