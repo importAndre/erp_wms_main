@@ -1,5 +1,5 @@
 from ..database import Base
-from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey, JSON, TIMESTAMP, text
+from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey, JSON, TIME, TIMESTAMP, text
 
 class Company(Base):
     __tablename__ = "DimCompanies"
@@ -64,6 +64,25 @@ class UserPersmissions(Base):
     updated_at = Column(TIMESTAMP(timezone=True), server_default=text('now()'))
     
 
+class EmployeePontos(Base):
+    __tablename__ = "FactEmployeePontos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("DimEmployees.id"), nullable=True)
+    method = Column(Boolean, nullable=False, default=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=text('now()'))
+
+
+class EmployeeWorkHours(Base):
+    __tablename__ = "DimEmployeeWorkHours"
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(Integer, ForeignKey("DimEmployees.id"), nullable=True)
+    week_day = Column(Integer)
+    entry_time = Column(TIME(timezone=True))
+    exit_time = Column(TIME(timezone=True))
+
+    
 
 from ..database import Base
 from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey, Date, DateTime, text, UniqueConstraint

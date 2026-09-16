@@ -15,6 +15,10 @@ from app.routers.mercado_livre import router as ml_router
 from app.routers.permissions import router as per_router
 from app.routers.suppliers import router as sup_router
 from app.routers.finantials import router as fin_router
+from app.services.systemServices import router as sys_router
+from app.routers.orders import router as order_router
+
+from apscheduler.schedulers.background import BackgroundScheduler
 
 
 app = FastAPI()
@@ -35,6 +39,16 @@ def hello():
     return {"message": "Welcome to the ultimate erp wms"}
 
 
+from app.services.systemServices import check_products_update
+from app.routers.orders import get_ml_orders
+def start_scheduler():
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(check_products_update, 'interval', minutes=30)
+    scheduler.add_job(get_ml_orders, 'interval', minutes=5)
+    scheduler.start()
+
+start_scheduler()
+
 app.include_router(user_router)
 app.include_router(company_router)
 app.include_router(product_router)
@@ -46,3 +60,5 @@ app.include_router(ml_router)
 app.include_router(per_router)
 app.include_router(sup_router)
 app.include_router(fin_router)
+app.include_router(sys_router)
+app.include_router(order_router)

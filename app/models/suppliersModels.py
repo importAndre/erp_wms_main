@@ -71,3 +71,33 @@ class Purchases(Base):
         UniqueConstraint("invoice_id", "c_prod", "quantity", "company_id", name='uq_inv_prod_qt_cid'),
     )
 
+
+class SupplierOrders(Base):
+    __tablename__ = 'FactSupplierOrders'
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("DimCompanies.id"), nullable=False)
+    invoice_id = Column(Integer, nullable=True)
+    supplier_internal_code = Column(String, nullable=False)
+    arrived_percent = Column(Float, nullable=False, default=0)
+    invoice_emit = Column(TIMESTAMP(timezone=True), nullable=True)
+    date_expected = Column(TIMESTAMP(timezone=True), nullable=True)
+    arrived_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text('now()'))
+
+    items = relationship("SupplierOrderItems", back_populates="order", cascade="all, delete-orphan")
+
+
+class SupplierOrderItems(Base):
+    __tablename__ = 'FactSupplierOrderItems'
+
+    id = Column(Integer, primary_key=True, index=True)
+    order_id = Column(Integer, ForeignKey("FactSupplierOrders.id"), nullable=False)
+    is_composition = Column(Boolean, default=False)
+    product_id = Column(Integer, ForeignKey("DimProducts.id"), nullable=True)
+    composition_id = Column(Integer, ForeignKey("DimCompositions.id"), nullable=True)
+    quantity = Column(Integer)
+    check_quantity = Column(Float, default=0)
+
+    order = relationship("SupplierOrders", back_populates="items")
+

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session, joinedload
 from ..models import accountModels
 from ..schemas import employeesSchemas
-from ..services import employeeServices
+from ..services import employeeServices, userServices
 from ..database import get_db
 from ..oauth2 import get_current_user
 from typing import Union, List, Optional
@@ -12,7 +12,7 @@ from io import BytesIO
 from PyPDF2 import PdfReader
 import re
 import unicodedata
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 from calendar import monthrange
 
 router = APIRouter(
@@ -21,7 +21,10 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
-@router.get("/", response_model=Union[employeesSchemas.EmployeeResponse, List[employeesSchemas.EmployeeResponse]])
+@router.get(
+    "/", 
+    response_model=Union[employeesSchemas.EmployeeResponse, List[employeesSchemas.EmployeeResponse]]
+)
 def get_employees(
     emp_id: Optional[int] = None,
     current_user=Depends(get_current_user),
@@ -35,7 +38,9 @@ def get_employees(
     return employeeServices.Employee(emp_id=emp_id, db=db).get_employee()
 
 
-@router.post("/register")
+@router.post(
+    "/register"
+)
 def register_employee(
     employee: employeesSchemas.EmployeeRegister,
     current_user=Depends(get_current_user),
@@ -64,9 +69,404 @@ def register_employee(
     db.refresh(new_employee)
 
     return new_employee
+
+
+@router.patch(
+    "/{employee_id}", 
+    response_model=employeesSchemas.EmployeeResponse
+)
+def update_employee(
+    employee_id: int,
+    payload: employeesSchemas.EmployeeUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission Denied"
+        )
+
+    employee = db.query(accountModels.Employee).filter(
+        accountModels.Employee.id == employee_id
+    ).first()
+
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Funcionário não encontrado"
+        )
+
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Informe ao menos um campo para atualizar"
+        )
+
+    required_fields = {"first_name", "last_name", "email", "cpf", "company_id"}
+    null_required_fields = [
+        field for field in required_fields
+        if field in update_data and update_data[field] is None
+    ]
+    if null_required_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Os campos {', '.join(sorted(null_required_fields))} não podem ser nulos"
+        )
+
+    for field, value in update_data.items():
+        setattr(employee, field, value)
+
+    try:
+        db.commit()
+        db.refresh(employee)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="CPF ou e-mail já cadastrado para outro funcionário"
+        )
+
+    return employee
     
 
-@router.get("/payroll")
+
+@router.get("/bater-ponto")
+def bater_ponto(
+    current_user=Depends(get_current_user),
+    method: Optional[bool] = True,
+    db: Session = Depends(get_db)
+):
+
+    user = userServices.User(user=current_user, db=db)
+    user.get_user()
+    emp = user.get_employee()
+    new_ponto = accountModels.EmployeePontos(
+        employee_id=emp.id,
+        method=method,
+        created_at=datetime.now()
+    )
+    db.add(new_ponto)
+    db.commit()
+    db.refresh(new_ponto)
+    return new_ponto
+
+
+@router.get("/pontos")
+def get_pontos(
+    employee_id: Optional[int] = None,
+    date_begin: Optional[date] = None,
+    date_end: Optional[date] = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Retorna o espelho de ponto e o resumo de horas do período.
+
+    `EmployeePontos.method=True` é uma entrada e `False` é uma saída.
+    `EmployeeWorkHours.week_day` segue o padrão do Python: 0=segunda e
+    6=domingo. Os limites do período são inclusivos.
+    """
+    today = datetime.now().date()
+    if date_begin is None:
+        date_begin = today.replace(day=1)
+    if date_end is None:
+        date_end = today
+
+    if date_begin > date_end:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="date_begin não pode ser maior que date_end"
+        )
+
+    # Um funcionário só pode consultar a própria folha de ponto.
+    if not current_user.is_superuser:
+        if not current_user.is_employee or not current_user.employee_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Usuário não está vinculado a um funcionário"
+            )
+        if employee_id is not None and employee_id != current_user.employee_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Você não pode consultar os pontos de outro funcionário"
+            )
+        employee_ids = [current_user.employee_id]
+    elif employee_id is not None:
+        employee_ids = [employee_id]
+    else:
+        employee_ids = [
+            row.id for row in db.query(accountModels.Employee.id).order_by(
+                accountModels.Employee.id
+            ).all()
+        ]
+
+    employees = db.query(accountModels.Employee).filter(
+        accountModels.Employee.id.in_(employee_ids)
+    ).all() if employee_ids else []
+    employees_by_id = {employee.id: employee for employee in employees}
+
+    missing_ids = sorted(set(employee_ids) - set(employees_by_id))
+    if missing_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Funcionário não encontrado: {missing_ids[0]}"
+        )
+
+    period_start = datetime.combine(date_begin, time.min)
+    # Busca até o dia seguinte para conseguir fechar uma jornada noturna.
+    period_query_end = datetime.combine(date_end + timedelta(days=2), time.min)
+
+    pontos = db.query(accountModels.EmployeePontos).filter(
+        accountModels.EmployeePontos.employee_id.in_(employee_ids),
+        accountModels.EmployeePontos.created_at >= period_start,
+        accountModels.EmployeePontos.created_at < period_query_end
+    ).order_by(
+        accountModels.EmployeePontos.employee_id,
+        accountModels.EmployeePontos.created_at,
+        accountModels.EmployeePontos.id
+    ).all() if employee_ids else []
+
+    escalas = db.query(accountModels.EmployeeWorkHours).filter(
+        accountModels.EmployeeWorkHours.employee_id.in_(employee_ids)
+    ).order_by(
+        accountModels.EmployeeWorkHours.employee_id,
+        accountModels.EmployeeWorkHours.week_day,
+        accountModels.EmployeeWorkHours.entry_time
+    ).all() if employee_ids else []
+
+    pontos_by_employee = {emp_id: [] for emp_id in employee_ids}
+    for ponto in pontos:
+        pontos_by_employee[ponto.employee_id].append(ponto)
+
+    escalas_by_employee = {emp_id: {} for emp_id in employee_ids}
+    for escala in escalas:
+        escalas_by_employee[escala.employee_id].setdefault(
+            escala.week_day, []
+        ).append(escala)
+
+    def seconds_between(begin, end):
+        return max(0, int((end - begin).total_seconds()))
+
+    def duration(seconds):
+        seconds = max(0, int(seconds))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return {
+            "seconds": seconds,
+            "decimal_hours": round(seconds / 3600, 2),
+            "formatted": f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        }
+
+    def schedule_intervals(emp_id, work_date):
+        result = []
+        for escala in escalas_by_employee[emp_id].get(work_date.weekday(), []):
+            if not escala.entry_time or not escala.exit_time:
+                continue
+            entry_time = (
+                escala.entry_time.timetz()
+                if isinstance(escala.entry_time, datetime)
+                else escala.entry_time
+            )
+            exit_time = (
+                escala.exit_time.timetz()
+                if isinstance(escala.exit_time, datetime)
+                else escala.exit_time
+            )
+            begin = datetime.combine(work_date, entry_time)
+            end = datetime.combine(work_date, exit_time)
+            if end <= begin:
+                end += timedelta(days=1)
+            result.append((begin, end))
+        result.sort(key=lambda interval: interval[0])
+        merged = []
+        for begin, end in result:
+            if merged and begin <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((begin, end))
+        return merged
+
+    def overlap_seconds(begin, end, intervals):
+        total = 0
+        for scheduled_begin, scheduled_end in intervals:
+            overlap_begin = max(begin, scheduled_begin)
+            overlap_end = min(end, scheduled_end)
+            if overlap_end > overlap_begin:
+                total += seconds_between(overlap_begin, overlap_end)
+        # Evita contar duas vezes caso existam escalas sobrepostas cadastradas.
+        return min(total, seconds_between(begin, end))
+
+    results = []
+    for emp_id in employee_ids:
+        employee = employees_by_id[emp_id]
+        daily = {
+            date_begin + timedelta(days=offset): {
+                "sessions": [],
+                "inconsistencies": []
+            }
+            for offset in range((date_end - date_begin).days + 1)
+        }
+
+        open_entry = None
+        for ponto in pontos_by_employee[emp_id]:
+            if ponto.method:
+                if open_entry is not None:
+                    entry_date = open_entry.created_at.date()
+                    if entry_date in daily:
+                        daily[entry_date]["inconsistencies"].append({
+                            "type": "entry_without_exit",
+                            "point_id": open_entry.id,
+                            "at": open_entry.created_at
+                        })
+                open_entry = ponto
+                continue
+
+            if open_entry is None:
+                if ponto.created_at.date() in daily:
+                    daily[ponto.created_at.date()]["inconsistencies"].append({
+                        "type": "exit_without_entry",
+                        "point_id": ponto.id,
+                        "at": ponto.created_at
+                    })
+                continue
+
+            entry_at = open_entry.created_at
+            exit_at = ponto.created_at
+            entry_date = entry_at.date()
+            if entry_date in daily:
+                worked = seconds_between(entry_at, exit_at)
+                regular = overlap_seconds(
+                    entry_at, exit_at, schedule_intervals(emp_id, entry_date)
+                )
+                daily[entry_date]["sessions"].append({
+                    "entry_point_id": open_entry.id,
+                    "exit_point_id": ponto.id,
+                    "entry_at": entry_at,
+                    "exit_at": exit_at,
+                    "worked": duration(worked),
+                    "regular": duration(regular),
+                    "overtime": duration(worked - regular)
+                })
+            open_entry = None
+
+        if open_entry is not None and open_entry.created_at.date() in daily:
+            daily[open_entry.created_at.date()]["inconsistencies"].append({
+                "type": "entry_without_exit",
+                "point_id": open_entry.id,
+                "at": open_entry.created_at
+            })
+
+        total_worked = total_regular = total_overtime = total_expected = 0
+        days = []
+        for work_date, day_data in daily.items():
+            intervals = schedule_intervals(emp_id, work_date)
+            expected = sum(seconds_between(begin, end) for begin, end in intervals)
+            worked = sum(s["worked"]["seconds"] for s in day_data["sessions"])
+            regular = sum(s["regular"]["seconds"] for s in day_data["sessions"])
+            overtime = sum(s["overtime"]["seconds"] for s in day_data["sessions"])
+            missing = max(0, expected - regular)
+
+            total_expected += expected
+            total_worked += worked
+            total_regular += regular
+            total_overtime += overtime
+
+            days.append({
+                "date": work_date,
+                "week_day": work_date.weekday(),
+                "scheduled_intervals": [
+                    {"entry_at": begin, "exit_at": end}
+                    for begin, end in intervals
+                ],
+                "expected": duration(expected),
+                "worked": duration(worked),
+                "regular": duration(regular),
+                "overtime": duration(overtime),
+                "missing": duration(missing),
+                **day_data
+            })
+
+        total_missing = max(0, total_expected - total_regular)
+        monthly = {}
+        for day in days:
+            month_key = day["date"].strftime("%Y-%m")
+            month = monthly.setdefault(month_key, {
+                "expected": 0,
+                "worked": 0,
+                "regular": 0,
+                "overtime": 0,
+                "missing": 0
+            })
+            for metric in month:
+                month[metric] += day[metric]["seconds"]
+
+        monthly_summary = []
+        for month_key, totals in monthly.items():
+            missing = totals["missing"]
+            overtime = totals["overtime"]
+            balance = overtime - missing
+            monthly_summary.append({
+                "month": month_key,
+                **{
+                    metric: duration(value)
+                    for metric, value in totals.items()
+                },
+                "balance": (
+                    duration(balance)
+                    if balance >= 0
+                    else {
+                        **duration(-balance),
+                        "seconds": balance,
+                        "decimal_hours": round(balance / 3600, 2),
+                        "formatted": "-" + duration(-balance)["formatted"]
+                    }
+                )
+            })
+
+        results.append({
+            "employee": {
+                "id": employee.id,
+                "name": f"{employee.first_name} {employee.last_name}".strip(),
+                "company_id": employee.company_id,
+                "position": employee.position,
+                "department": employee.department
+            },
+            "period": {"date_begin": date_begin, "date_end": date_end},
+            "summary": {
+                "expected": duration(total_expected),
+                "worked": duration(total_worked),
+                "regular": duration(total_regular),
+                "overtime": duration(total_overtime),
+                "missing": duration(total_missing),
+                "balance": duration(total_overtime - total_missing)
+                if total_overtime >= total_missing else {
+                    **duration(total_missing - total_overtime),
+                    "seconds": total_overtime - total_missing,
+                    "decimal_hours": round(
+                        (total_overtime - total_missing) / 3600, 2
+                    ),
+                    "formatted": "-" + duration(
+                        total_missing - total_overtime
+                    )["formatted"]
+                },
+                "days_with_work": sum(
+                    1 for day in days if day["worked"]["seconds"] > 0
+                ),
+                "days_with_inconsistencies": sum(
+                    1 for day in days if day["inconsistencies"]
+                )
+            },
+            "monthly_summary": monthly_summary,
+            "days": days
+        })
+
+    return results[0] if employee_id is not None or not current_user.is_superuser else results
+
+@router.get(
+    "/payroll"
+)
 def get_payroll(
     emp_id: Optional[int] = None,
     current_user=Depends(get_current_user),
@@ -138,7 +538,8 @@ def br_to_float(value: Optional[str]) -> float:
 def parse_date_br(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
-    value = value.strip()
+    # PDF text extraction may insert spaces inside dates (e.g. "01/12/ 2024").
+    value = re.sub(r"\s+", "", value)
     try:
         return datetime.strptime(value, "%d/%m/%Y")
     except ValueError:
@@ -184,7 +585,10 @@ def parse_reference_from_text(text: str):
 
     # adiantamento
     match_period = re.search(
-        r"adiantamento salarial de\s*(\d{2}/\d{2}/\d{4})\s*até\s*(\d{2}/\d{2}/\d{4})",
+        r"adiantamento salarial de\s*"
+        r"(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})\s*"
+        r"até\s*"
+        r"(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})",
         text,
         re.IGNORECASE
     )
@@ -209,7 +613,7 @@ def parse_advance_payment_date(text: str) -> Optional[datetime]:
     20/03/2026 Adiantamento em:
     """
     match = re.search(
-        r"(\d{2}/\d{2}/\d{4})\s+Adiantamento em:",
+        r"(\d{2}\s*/\s*\d{2}\s*/\s*\d{4})\s+Adiantamento em:",
         text,
         re.IGNORECASE
     )
@@ -496,7 +900,9 @@ def parse_employee_block(block: str) -> dict:
     }
 
 
-@router.post("/upload-payroll")
+@router.post(
+    "/upload-payroll"
+)
 async def upload_payroll(
     file: UploadFile = File(...),
     current_user=Depends(get_current_user),
@@ -709,3 +1115,82 @@ async def upload_payroll(
         "skipped": skipped,
         "errors": errors
     }
+
+
+@router.post(
+    "/payroll",
+    response_model=employeesSchemas.EmployeePayrollResponse,
+    status_code=status.HTTP_201_CREATED
+)
+def register_payroll(
+    payload: employeesSchemas.EmployeePayrollCreate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Permission Denied"
+        )
+
+    if not 1 <= payload.mes_referencia <= 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="mes_referencia deve estar entre 1 e 12"
+        )
+
+    employee = db.query(accountModels.Employee).filter(
+        accountModels.Employee.id == payload.employee_id
+    ).first()
+
+    if not employee:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Funcionário não encontrado"
+        )
+
+    if employee.company_id != payload.company_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A empresa informada não corresponde à empresa do funcionário"
+        )
+
+    invalid_item_types = {
+        item.tipo for item in payload.items
+        if item.tipo.lower() not in {"provento", "desconto"}
+    }
+    if invalid_item_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="O tipo de cada item deve ser 'provento' ou 'desconto'"
+        )
+
+    payroll_data = payload.model_dump(exclude={"items"})
+    payroll = accountModels.EmployeePayroll(**payroll_data)
+
+    for item in payload.items:
+        item_data = item.model_dump()
+        item_data["tipo"] = item_data["tipo"].lower()
+        payroll.items.append(accountModels.EmployeePayrollItem(**item_data))
+
+    try:
+        db.add(payroll)
+        db.commit()
+        db.refresh(payroll)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Não foi possível registrar o payroll devido a um conflito de dados"
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+    return db.query(accountModels.EmployeePayroll).options(
+        joinedload(accountModels.EmployeePayroll.employee),
+        joinedload(accountModels.EmployeePayroll.items)
+    ).filter(
+        accountModels.EmployeePayroll.id == payroll.id
+    ).first()
+

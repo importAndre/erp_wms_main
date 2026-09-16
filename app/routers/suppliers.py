@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 import requests
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, distinct
-from ..models import suppliersModels, identificatorsModels
+from ..models import accountModels, suppliersModels, identificatorsModels, productModels, compositionModels
 from ..schemas import supplierSchemas, finantialsSchemas
 from ..database import get_db
 from ..oauth2 import get_current_user
@@ -133,6 +134,172 @@ def get_supplier(
     return supplierServices.Supplier(sid=sid, db=db).get_supplier()
 
 
+@router.post(
+    "/orders",
+    response_model=supplierSchemas.SupplierOrderResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def register_supplier_order(
+    order: supplierSchemas.SupplierOrderCreate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    company_exists = db.query(accountModels.Company.id).filter(
+        accountModels.Company.id == order.company_id
+    ).first()
+    if not company_exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Empresa não encontrada",
+        )
+
+    supplier_exists = db.query(suppliersModels.Suppliers.id).filter(
+        suppliersModels.Suppliers.internal_code == order.supplier_internal_code
+    ).first()
+    if not supplier_exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Fornecedor não encontrado pelo código interno informado",
+        )
+
+    product_ids = {item.product_id for item in order.items if item.product_id is not None}
+    composition_ids = {
+        item.composition_id for item in order.items if item.composition_id is not None
+    }
+
+    existing_product_ids = {
+        row[0]
+        for row in db.query(productModels.Product.id).filter(
+            productModels.Product.id.in_(product_ids),
+            productModels.Product.company_id == order.company_id,
+        ).all()
+    } if product_ids else set()
+    missing_product_ids = product_ids - existing_product_ids
+    if missing_product_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Produtos não encontrados na empresa: {sorted(missing_product_ids)}",
+        )
+
+    existing_composition_ids = {
+        row[0]
+        for row in db.query(compositionModels.Composition.id).filter(
+            compositionModels.Composition.id.in_(composition_ids),
+            compositionModels.Composition.company_id == order.company_id,
+        ).all()
+    } if composition_ids else set()
+    missing_composition_ids = composition_ids - existing_composition_ids
+    if missing_composition_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Composições não encontradas na empresa: {sorted(missing_composition_ids)}",
+        )
+
+    order_data = order.model_dump(exclude={"items"})
+    new_order = suppliersModels.SupplierOrders(**order_data)
+    new_order.items = [
+        suppliersModels.SupplierOrderItems(**item.model_dump())
+        for item in order.items
+    ]
+
+    try:
+        db.add(new_order)
+        db.commit()
+        db.refresh(new_order)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Não foi possível registrar o pedido do fornecedor",
+        ) from exc
+
+    return new_order
+
+
+@router.get(
+    "/orders",
+    response_model=List[supplierSchemas.SupplierOrderResponse],
+)
+def list_supplier_orders(
+    company_id: int,
+    supplier_internal_code: Optional[str] = None,
+    date_begin: Optional[datetime] = None,
+    date_end: Optional[datetime] = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    query = db.query(suppliersModels.SupplierOrders).options(
+        selectinload(suppliersModels.SupplierOrders.items)
+    ).filter(suppliersModels.SupplierOrders.company_id == company_id)
+
+    if supplier_internal_code:
+        query = query.filter(
+            suppliersModels.SupplierOrders.supplier_internal_code
+            == supplier_internal_code
+        )
+    if date_begin:
+        query = query.filter(suppliersModels.SupplierOrders.created_at >= date_begin)
+    if date_end:
+        query = query.filter(suppliersModels.SupplierOrders.created_at <= date_end)
+
+    return query.order_by(suppliersModels.SupplierOrders.created_at.desc()).all()
+
+
+@router.get(
+    "/orders/{order_id}",
+    response_model=supplierSchemas.SupplierOrderResponse,
+)
+def get_supplier_order(
+    order_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    order = db.query(suppliersModels.SupplierOrders).options(
+        selectinload(suppliersModels.SupplierOrders.items)
+    ).filter(suppliersModels.SupplierOrders.id == order_id).first()
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pedido do fornecedor não encontrado",
+        )
+    return order
+
+
+@router.patch(
+    "/orders/{order_id}",
+    response_model=supplierSchemas.SupplierOrderResponse,
+)
+def update_supplier_order(
+    order_id: int,
+    update: supplierSchemas.SupplierOrderUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    order = db.query(suppliersModels.SupplierOrders).options(
+        selectinload(suppliersModels.SupplierOrders.items)
+    ).filter(suppliersModels.SupplierOrders.id == order_id).first()
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pedido do fornecedor não encontrado",
+        )
+
+    for field, value in update.model_dump(exclude_unset=True).items():
+        setattr(order, field, value)
+
+    try:
+        db.commit()
+        db.refresh(order)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Não foi possível atualizar o pedido do fornecedor",
+        ) from exc
+
+    return order
+
+
 
 @router.get("/payments", response_model=supplierSchemas.SupplierPaymentsResponse)
 def get_payments(
@@ -140,15 +307,19 @@ def get_payments(
     company_id: Optional[int] = None,
     date_begin: Optional[str] = None,
     date_end: Optional[str] = None,
+    chave_acesso: Optional[str] = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     register_payments(current_user=current_user, db=db)
 
-    today = datetime.now()
-
-    # Base: parcelas a vencer/vencendo daqui pra frente (igual sua regra atual)
-    filter_params = [suppliersModels.SupplierPayments.vencimento >= today]
+    # Nas listagens comuns, mostra apenas parcelas a vencer. Uma busca por chave
+    # precisa localizar a nota independentemente do vencimento.
+    filter_params = []
+    if chave_acesso is None:
+        filter_params.append(
+            suppliersModels.SupplierPayments.vencimento >= datetime.now()
+        )
     if supplier_id is not None:
         filter_params.append(suppliersModels.SupplierPayments.supplier_id == supplier_id)
     if company_id is not None:
@@ -157,6 +328,8 @@ def get_payments(
         filter_params.append(suppliersModels.SupplierPayments.vencimento >= date_begin)
     if date_end is not None:
         filter_params.append(suppliersModels.SupplierPayments.vencimento <= date_end)
+    if chave_acesso is not None:
+        filter_params.append(suppliersModels.SupplierPayments.chave_acesso == chave_acesso)
 
     base_query = db.query(suppliersModels.SupplierPayments).filter(*filter_params)\
             .order_by(suppliersModels.SupplierPayments.vencimento.desc()).all()
@@ -168,10 +341,18 @@ def get_payments(
         payment = supplierSchemas.Payments()
         result.total += p.valor
 
+        payment.id = p.id
+        payment.company_id = p.company_id
+        payment.supplier_id = p.supplier_id
+        payment.transaction_id = p.transaction_id
+        payment.chave_acesso = p.chave_acesso
+        payment.numero_nota = p.numero_nota
         payment.parcela = p.parcela
         payment.quantidade_parcelas = p.quantidade_parcelas
         payment.valor = p.valor
         payment.vencimento = p.vencimento
+        payment.date_emit = p.date_emit
+        payment.data_pagamento = p.data_pagamento
         payment.supplier = supplierServices.Supplier(sid=p.supplier_id, db=db).get_supplier()
         
         result.payments.append(payment)
@@ -185,6 +366,164 @@ def get_payments(
     result.notas_pendentes = len(notas_pendentes)
 
     return result
+
+
+
+
+
+@router.post(
+    "/payments/manual",
+    response_model=Union[supplierSchemas.SupplierPaymentManualResponse, List[supplierSchemas.SupplierPaymentManualResponse]],
+    status_code=status.HTTP_201_CREATED
+)
+def register_supplier_payment_manual(
+    payment: supplierSchemas.SupplierPaymentManualCreate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    company = db.query(accountModels.Company).filter(
+        accountModels.Company.id == payment.company_id
+    ).first()
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Empresa não encontrada"
+        )
+
+    supplier = db.query(suppliersModels.Suppliers).filter(
+        suppliersModels.Suppliers.id == payment.supplier_id
+    ).first()
+    if not supplier:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Fornecedor não encontrado"
+        )
+
+    if payment.parcela > payment.quantidade_parcelas:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A parcela não pode ser maior que a quantidade de parcelas"
+        )
+
+    new_payment = suppliersModels.SupplierPayments(**payment.model_dump())
+
+    try:
+        db.add(new_payment)
+        db.commit()
+        db.refresh(new_payment)
+    except IntegrityError:
+        db.rollback()
+        # return db.query(suppliersModels.SupplierPayments).filter(suppliersModels.SupplierPayments.chave_acesso == payment.chave_acesso).all()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Já existe um pagamento com esta empresa, chave de acesso e parcela"
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+    return new_payment
+
+
+@router.patch(
+    "/payments/{payment_id}",
+    response_model=supplierSchemas.SupplierPaymentManualResponse
+)
+def update_supplier_payment(
+    payment_id: int,
+    payload: supplierSchemas.SupplierPaymentUpdate,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    print(payload)
+    payment = db.query(suppliersModels.SupplierPayments).filter(
+        suppliersModels.SupplierPayments.id == payment_id
+    ).first()
+    if not payment:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pagamento não encontrado"
+        )
+
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Informe ao menos um campo para atualizar"
+        )
+
+    required_fields = {
+        "company_id",
+        "supplier_id",
+        "chave_acesso",
+        "numero_nota"
+    }
+    null_required_fields = [
+        field for field in required_fields
+        if field in update_data and update_data[field] is None
+    ]
+    if null_required_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Os campos {', '.join(sorted(null_required_fields))} "
+                "não podem ser nulos"
+            )
+        )
+
+    company_id = update_data.get("company_id", payment.company_id)
+    company = db.query(accountModels.Company).filter(
+        accountModels.Company.id == company_id
+    ).first()
+    if not company:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Empresa não encontrada"
+        )
+
+    supplier_id = update_data.get("supplier_id", payment.supplier_id)
+    if supplier_id is not None:
+        supplier = db.query(suppliersModels.Suppliers).filter(
+            suppliersModels.Suppliers.id == supplier_id
+        ).first()
+        if not supplier:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Fornecedor não encontrado"
+            )
+
+    parcela = update_data.get("parcela", payment.parcela)
+    quantidade_parcelas = update_data.get(
+        "quantidade_parcelas",
+        payment.quantidade_parcelas
+    )
+    if (
+        parcela is not None
+        and quantidade_parcelas is not None
+        and parcela > quantidade_parcelas
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A parcela não pode ser maior que a quantidade de parcelas"
+        )
+
+    for field, value in update_data.items():
+        setattr(payment, field, value)
+
+    try:
+        db.commit()
+        db.refresh(payment)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Já existe um pagamento com esta empresa, chave de acesso e parcela"
+        )
+    except Exception:
+        db.rollback()
+        raise
+
+    return payment
 
 
 
@@ -538,3 +877,32 @@ def get_stock_value(
         return supplierServices.Supplier(sid=supplier_id, db=db).get_supplier_products()
     query = db.query(suppliersModels.Suppliers).all()
     return [supplierServices.Supplier(sid=item.id, db=db).get_supplier_products() for item in query]
+
+
+@router.get("/products/{internal_code}")
+def get_products(
+    internal_code: str,
+    date_begin: Optional[datetime] = None,
+    date_end: Optional[datetime] = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from .products import product_sales
+    suppliers = db.query(suppliersModels.Suppliers).filter(suppliersModels.Suppliers.internal_code == internal_code).all()
+    sup_ids = [s.id for s in suppliers]
+
+    products = db.query(productModels.Product).filter(productModels.Product.supplier_id.in_(sup_ids))
+    result = []
+    for p in products:
+        # print(p.sku)
+        result.append(
+            product_sales(
+                company_id=p.company_id,
+                product_id=[p.id],
+                date_begin=date_begin,
+                date_end=date_end,
+                current_user=current_user,
+                db=db
+            )
+        )
+    return result

@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Optional, List
+from pydantic import BaseModel, Field
+from typing import Optional, List, Union
 from .companySchemas import CompanyResponse
 from datetime import datetime
 from .supplierSchemas import Payments
@@ -84,15 +84,29 @@ class BalancoPatrimonial(BaseModel):
     total_passivo_patrimonio_liquido: Optional[float] = 0
 
 
+class ReceitaOperacionalBrutaDetail(BaseModel):
+    invoice_number: Optional[str] = None
+    value: Optional[float] = None
+    date: Optional[datetime] = None
 
 class ReceitaOperacionalBruta(BaseModel):
     vendas: Optional[float] = 0
+    rendimentos: Optional[float] = 0
+    details: Optional[List[ReceitaOperacionalBrutaDetail]] = []
 
 
 class cmv_detail(BaseModel):
     compras: Optional[float] = 0
     estoque_passado: Optional[float] = 0
     estoque_atual: Optional[float] = 0
+
+
+class TaxesDetails(BaseModel):
+    transaction_id: Optional[int] = None
+    name: Optional[str] = None
+    detail: Optional[str] = None
+    value: Optional[float] = None
+    payment_date: Optional[datetime] = None
 
 class DeducoesDeVenda(BaseModel):
     pis_cofins: Optional[float] = 0
@@ -102,10 +116,13 @@ class DeducoesDeVenda(BaseModel):
     iof: Optional[float] = 0
     tarifas: Optional[float] = 0
     comissoes: Optional[float] = 0
+    despesas_administrativas: Optional[float] = 0
+    despesas_bancarias: Optional[float] = 0
     frete: Optional[float] = 0
     custo_mercadoria_vendida: Optional[float] = 0
     cmv_details: Optional[cmv_detail] = None
     custo_mercadoria_vendida_details: Optional[List[ProductResponse]] = []
+    taxes_details: Optional[List[TaxesDetails]] = []
 
 class GastosVariaveis(BaseModel):
     cartao_de_credito: Optional[float] = 0
@@ -129,6 +146,8 @@ class Investimentos(BaseModel):
 
 
 class DRE(BaseModel):
+    date_begin: Optional[datetime] = None
+    date_end: Optional[datetime] = None
     faturamento: Optional[float] = 0
     receita_operacional_bruta: Optional[ReceitaOperacionalBruta] = None
     total_deducoes_de_venda: Optional[float] = 0
@@ -137,15 +156,105 @@ class DRE(BaseModel):
     total_gastos_variaveis: Optional[float] = 0
     gastos_variaveis: Optional[GastosVariaveis] = None
     lucro_bruto: Optional[float] = 0
+    margem_contribuicao: Optional[float] = 0
     total_custos_fixos: Optional[float] = 0
     custos_fixos: Optional[CustosFixos] = None
     lucro_operacional: Optional[float] = 0
     total_investimentos: Optional[float] = 0
     investimentos: Optional[Investimentos] = None
     distribuicao_lucros: Optional[float] = 0
+    ponto_de_equilibrio_contabil: Optional[float] = 0
+    ponto_de_equilibrio_economico: Optional[float] = 0
+
+
+class DFCEntradasOperacionais(BaseModel):
+    vendas: float = 0
+    a_receber: float = 0
+    recebimento_frete: float = 0
+    reembolso_tarifas: float = 0
+    outros: float = 0
+
+class DFCEntradasNaoOperacionais(BaseModel):
+    entrada_emprestimo: float = 0
+    rendimentos: float = 0
+    resgate_aplicacoes: float = 0
+    outros: float = 0
+
+
+class DFCEntradas(BaseModel):
+    entradas_operacionais: float = 0
+    entradas_operacionais_details: Optional[DFCEntradasOperacionais] = None
+    entradas_nao_operacionais: float = 0
+    entradas_nao_operacionais_details: Optional[DFCEntradasNaoOperacionais] = None
+
+class DFCSaidasOperacionais(BaseModel):
+    fornecedores: float = 0
+    impostos: float = 0
+    impostos_details: Optional[DeducoesDeVenda] = None
+    fixos: float = 0
+    fixos_details: Optional[CustosFixos] = None
+    cartao_credito: float = 0
+    folha_salarial: float = 0
+    logistica: float = 0
+    compras: float = 0
+    devolucao_cliente: float = 0
+    devolucao_de_venda: float = 0
+    publicidade: float = 0
+    outros: float = 0
+
+class DFCSaidasNaoOperacionais(BaseModel):
+    despesas_bancarias: float = 0
+    pagamento_emprestimo: float = 0
+    aplicacoes_financeiras: float = 0
+    distribuicao_lucros: float = 0
+    outros: float = 0
+
+
+class DFCSaidas(BaseModel):
+    saidas_operacionais: float = 0
+    saidas_operacionais_details: Optional[DFCSaidasOperacionais] = None
+    saidas_nao_operacionais: float = 0
+    saidas_nao_operacionais_details: Optional[DFCSaidasNaoOperacionais] = None
 
 
 
+class DFCFutureSales(BaseModel):
+    date: Optional[datetime] = None
+    value: Optional[float] = None
+
+class DFCFuture(BaseModel):
+    entrada_vendas: Optional[float] = None
+    vendas_details: Optional[List[DFCFutureSales]] = []
+    pagamentos_fornecedores: Optional[float] = None
+    fornecedores_details: Optional[List[DFCFutureSales]] = []
+    folha_salarial: Optional[float] = None
+    folha_salarial_details: Optional[List[DFCFutureSales]] = []
+    impostos: Optional[float] = None
+    impostos_details: Optional[List[DFCFutureSales]] = []
+
+
+class DFCBankBalance(BaseModel):
+    bank_id: int
+    bank_name: str
+    bank_code: Optional[str] = None
+    agency: Optional[str] = None
+    account_number: Optional[str] = None
+    account_digit: Optional[str] = None
+    saldo_inicial: float = 0
+    saldo_final: float = 0
+
+
+
+class DFC(BaseModel):
+    saldo_inicial: Optional[float] = None
+    saldos_bancos: List[DFCBankBalance] = Field(default_factory=list)
+    entradas: Optional[DFCEntradas] = None
+    total_entradas: Optional[float] = None
+    saidas: Optional[DFCSaidas] = None
+    total_saidas: Optional[float] = None
+    saldo_operacional: Optional[float] = None
+    saldo_final: Optional[float] = None
+    future: Optional[DFCFuture] = None
 
 
 
@@ -167,7 +276,7 @@ class InvoiceItemBase(BaseModel):
     cest: Optional[str] = None
     cfop: Optional[str] = None
     u_com: Optional[str] = None
-    q_com: Optional[int] = None
+    q_com: Optional[Union[int, float]] = None
     v_un_com: Optional[float] = None
     v_prod: Optional[float] = None
     ean_trib: Optional[str] = None
@@ -255,7 +364,30 @@ class TaxesBase(BaseModel):
 
     taxes: Optional[List[Infos]] = None
 
+
+class ProductPurchaseItem(BaseModel):
+    invoice: InvoiceBase
+    item: InvoiceItemBase
+    taxes: TaxesBase
+
     # meta_json = Column(JSON, nullable=True)
+
+class ProductPurchaseResults(BaseModel):
+    quantity: int = 0
+    v_prod: float = 0
+    invoices: List[ProductPurchaseItem] = Field(default_factory=list)
+
+
+class ProductSaleItem(BaseModel):
+    invoice: InvoiceBase
+    item: InvoiceItemBase
+    taxes: TaxesBase
+
+
+class ProductSaleResults(BaseModel):
+    quantity: int = 0
+    v_prod: float = 0
+    invoices: List[ProductSaleItem] = Field(default_factory=list)
 
 class EventsBase(BaseModel):
     pass
@@ -355,6 +487,9 @@ class AttributePayment(BaseModel):
     category_id: Optional[int] = None
     item_id: Optional[int] = None
 
+class EditTransaction(BaseModel):
+    transaction_id: int
+    counterparty_document: str
 
 
 class TransactionCategoryCreate(BaseModel):

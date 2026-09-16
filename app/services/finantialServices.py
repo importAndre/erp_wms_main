@@ -99,6 +99,7 @@ class PatrimonialBalance:
         pbar = tqdm(total=len(products), position=0, leave=True, desc='Products', unit='prod')
         for p in products:
             if self.date_begin_dt:
+                # print(self.date_begin_dt, self.date_end_dt)
                 product = Product(pid=p.id, db=self.db).get_product_date(date=self.date_end_dt)
                 # if p.sku == '6.ESTIL.PROF.25':
                 #     print(p.sku, p.available_stock, p.virtual_stock)
@@ -357,6 +358,13 @@ class Dre:
             pbar = tqdm(total=len(data['invoices']), position=0, leave=True, desc='Vendas', unit='nf')
             for item in data['invoices']:
                 invoice = finantialsSchemas.InvoiceBase.model_validate(item)
+                self.receita.details.append(
+                    finantialsSchemas.ReceitaOperacionalBrutaDetail(
+                        invoice_number=invoice.numero,
+                        value=invoice.v_prod,
+                        date=invoice.dh_emissao
+                    )
+                )
                 self.receita.vendas += invoice.v_prod
                 pbar.update(1)
 
@@ -369,9 +377,12 @@ class Dre:
         
         self._get_taxes()
         self._get_mercado_livre_infos()
+        self.get_other_infos()
 
         for item in self.receita:
             _, v = item
+            if isinstance(v, list):
+                continue
             self.total_faturamento += v
 
         for item in self.deducoes:
@@ -386,6 +397,15 @@ class Dre:
                 .filter(finantialsModels.Taxes.reference >= self.date_begin).all()
 
         for t in query:
+            self.deducoes.taxes_details.append(
+                finantialsSchemas.TaxesDetails(
+                    transaction_id=t.transaction_id,
+                    name=t.taxes_name,
+                    detail=t.detail,
+                    value=t.value,
+                    payment_date=t.payment_date,
+                )
+            )
             if t.taxes_name == 'ICMS':
                 self.deducoes.icms += t.value
             if t.taxes_name == 'PIS/COFINS':
@@ -472,6 +492,7 @@ class Dre:
                 if bill.detalhe in nada:
                     continue
                 elif bill.detalhe in tarifas:
+                    # print(bill.detalhe, bill.valor)
                     self.deducoes.tarifas += bill.valor
                 elif bill.detalhe in fretes:
                     if not bill.envio_cliente:
@@ -549,16 +570,16 @@ class Dre:
         for _, v in self.fixos:
             self.total_fixos += v
 
-    def _get_investimentos(self):
-        # self.total_investimentos = self.investimentos.publicidade
-        query = self.db.query(finantialsModels.Transactions)\
-                .filter(finantialsModels.Transactions.transaction_date >= self.date_begin_dt)\
-                .filter(finantialsModels.Transactions.transaction_date <= self.date_end_dt)\
-                .filter(finantialsModels.Transactions.category == 19).all()
-        for item in query:
-            self.investimentos.publicidade += item.value
+    # def _get_investimentos(self):
+    #     # self.total_investimentos = self.investimentos.publicidade
+    #     query = self.db.query(finantialsModels.Transactions)\
+    #             .filter(finantialsModels.Transactions.transaction_date >= self.date_begin_dt)\
+    #             .filter(finantialsModels.Transactions.transaction_date <= self.date_end_dt)\
+    #             .filter(finantialsModels.Transactions.category == 19).all()
+    #     for item in query:
+    #         self.investimentos.publicidade += item.value
 
-        self.total_investimentos = self.investimentos.publicidade = self.investimentos.caixa
+    #     self.total_investimentos = self.investimentos.publicidade + self.investimentos.caixa
 
     def _get_tm_costs(self):
         url = f'{API_URL}/freight'
@@ -609,35 +630,113 @@ class Dre:
         for item in query:
             self.dre.distribuicao_lucros += item.value
 
-    def get_dre(self, show_details =False):
+
+    def get_other_infos(self):
+        query = self.db.query(finantialsModels.Transactions)\
+            .filter(finantialsModels.Transactions.transaction_date >= self.date_begin_dt)\
+            .filter(finantialsModels.Transactions.transaction_date <= self.date_end_dt).all()
+
+        for item in query:
+            if item.category == 18:
+                self.receita.rendimentos += item.value
+            elif item.category == 19:
+                self.investimentos.publicidade += item.value
+            elif item.category == 20:
+                self.investimentos.caixa += item.value
+            elif item.category == 22:
+                self.deducoes.despesas_administrativas += item.value
+            elif item.category == 11:
+                self.deducoes.despesas_bancarias += item.value
+
+        self.total_investimentos = self.investimentos.publicidade + self.investimentos.caixa
+        
+
+
+    def get_dre(self, show_details=False, desired_margin=10):
         if not self.dre:
             self._load_receita()
             self._get_variaveis()
             self._get_custos_fixos()
-            self._get_investimentos()
-        
+            # self._get_investimentos()
+
         if not show_details:
+            self.receita.details = None
             self.deducoes.custo_mercadoria_vendida_details = None
+            self.deducoes.taxes_details = None
 
         self.dre = finantialsSchemas.DRE(
+            date_begin=self.date_begin,
+            date_end=self.date_end,
             faturamento=self.total_faturamento,
             receita_operacional_bruta=self.receita,
             total_deducoes_de_venda=self.total_deducoes,
             deducoes_de_venda=self.deducoes,
-            receita_liquida_de_vendas=self.total_faturamento - self.total_deducoes,
+            receita_liquida_de_vendas=(
+                self.total_faturamento - self.total_deducoes
+            ),
             total_gastos_variaveis=self.total_variaveis,
             gastos_variaveis=self.variaveis
         )
-        self.dre.lucro_bruto = self.dre.receita_liquida_de_vendas - self.dre.total_gastos_variaveis
+
+        self.dre.lucro_bruto = (
+            self.dre.receita_liquida_de_vendas
+            - self.dre.total_gastos_variaveis
+        )
+
+        if self.dre.faturamento <= 0:
+            raise ValueError(
+                "O faturamento deve ser maior que zero para calcular "
+                "a margem de contribuição."
+            )
+
+        # Índice da margem de contribuição: exemplo 0.25 = 25%
+        self.dre.margem_contribuicao = (
+            self.dre.lucro_bruto / self.dre.faturamento
+        )
+
         self.dre.total_custos_fixos = self.total_fixos
         self.dre.custos_fixos = self.fixos
-        self.dre.lucro_operacional = self.dre.lucro_bruto - self.dre.total_custos_fixos
+
+        self.dre.lucro_operacional = (
+            self.dre.lucro_bruto
+            - self.dre.total_custos_fixos
+        )
+
         self.dre.total_investimentos = self.total_investimentos
         self.dre.investimentos = self.investimentos
+
         self._get_distribuicao()
 
-        return self.dre
+        indice_margem_contribuicao = self.dre.margem_contribuicao
 
+        # if indice_margem_contribuicao <= 0:
+        #     raise ValueError(
+        #         "A margem de contribuição é zero ou negativa. "
+        #         "Não é possível calcular o ponto de equilíbrio."
+        #     )
+
+        # Ponto de equilíbrio contábil
+        self.dre.ponto_de_equilibrio_contabil = (
+            self.dre.total_custos_fixos
+            / indice_margem_contribuicao
+        )
+
+        # Margem de lucro desejada sobre o faturamento
+        margem_desejada = desired_margin / 100
+
+        # if margem_desejada >= indice_margem_contribuicao:
+        #     raise ValueError(
+        #         "A margem desejada deve ser menor que o índice "
+        #         "da margem de contribuição."
+        #     )
+
+        # Ponto de equilíbrio econômico para atingir a margem desejada
+        self.dre.ponto_de_equilibrio_economico = (
+            self.dre.total_custos_fixos
+            / (indice_margem_contribuicao - margem_desejada)
+        )
+
+        return self.dre
 
 class MultipleDRE:
     def __init__(
@@ -804,7 +903,321 @@ class MultipleDRE:
 
 
 class CashFlow:
-    pass
+    def __init__(
+        self,
+        company_id: int,
+        date_begin: date,
+        date_end: date,
+        future_date: Optional[date] = None,
+        db: Session = Depends(get_db)
+    ):
+        self.company_id = company_id
+        self.db = db
+
+        self.date_begin, self.date_end = normalize_period(date_begin, date_end)
+        self.date_begin_dt = start_of_day(self.date_begin)
+        self.date_end_dt = end_of_day(self.date_end)
+
+        if future_date:
+            self.future_date, _ = normalize_period(future_date, future_date)
+            self.future_date_dt = end_of_day(self.future_date)
+        else:
+            self.future_date_dt = None
+
+        self.company = Company(company_id=company_id, db=db).get_company()
+
+        self.entradas_operacionais = finantialsSchemas.DFCEntradasOperacionais()
+        self.entradas_nao_operacionais = finantialsSchemas.DFCEntradasNaoOperacionais()
+        self.entradas = finantialsSchemas.DFCEntradas()
+        self.impostos = finantialsSchemas.DeducoesDeVenda()
+        self.fixos = finantialsSchemas.CustosFixos()
+        self.saidas_operacionais = finantialsSchemas.DFCSaidasOperacionais()
+        self.saidas_nao_operacionais = finantialsSchemas.DFCSaidasNaoOperacionais()
+        self.saidas = finantialsSchemas.DFCSaidas()
+        self.cashflow = finantialsSchemas.DFC()
+        self._loaded = False
+
+
+    def _load_transactions(self):
+        query = self.db.query(finantialsModels.Transactions)\
+                .filter(finantialsModels.Transactions.company_id == self.company_id)\
+                .filter(finantialsModels.Transactions.transaction_date >= self.date_begin_dt)\
+                .filter(finantialsModels.Transactions.transaction_date <= self.date_end_dt).all()
+
+        for item in query:
+            value = abs(item.value or 0)
+
+            # Transferências entre contas da mesma empresa não alteram o caixa
+            # consolidado e, portanto, não entram nas entradas/saídas do DFC.
+            if item.category == 5:
+                continue
+
+            if item.method:
+                operational_entries = {
+                    9: "vendas",
+                    14: "recebimento_frete",
+                    15: "reembolso_tarifas",
+                }
+                non_operational_entries = {
+                    10: "rendimentos",
+                    16: "entrada_emprestimo",
+                    18: "rendimentos",
+                    20: "resgate_aplicacoes",
+                }
+
+                if item.category in operational_entries:
+                    field = operational_entries[item.category]
+                    setattr(
+                        self.entradas_operacionais,
+                        field,
+                        getattr(self.entradas_operacionais, field) + value
+                    )
+                elif item.category in non_operational_entries:
+                    field = non_operational_entries[item.category]
+                    setattr(
+                        self.entradas_nao_operacionais,
+                        field,
+                        getattr(self.entradas_nao_operacionais, field) + value
+                    )
+                else:
+                    self.entradas_operacionais.outros += value
+                continue
+
+            operational_outputs = {
+                1: "fornecedores",
+                2: "impostos",
+                3: "fixos",
+                4: "folha_salarial",
+                6: "cartao_credito",
+                8: "logistica",
+                12: "compras",
+                13: "devolucao_cliente",
+                19: "publicidade",
+                21: "devolucao_de_venda",
+            }
+            non_operational_outputs = {
+                7: "distribuicao_lucros",
+                11: "despesas_bancarias",
+                17: "pagamento_emprestimo",
+                20: "aplicacoes_financeiras",
+            }
+
+            if item.category in operational_outputs:
+                field = operational_outputs[item.category]
+                setattr(
+                    self.saidas_operacionais,
+                    field,
+                    getattr(self.saidas_operacionais, field) + value
+                )
+            elif item.category in non_operational_outputs:
+                field = non_operational_outputs[item.category]
+                setattr(
+                    self.saidas_nao_operacionais,
+                    field,
+                    getattr(self.saidas_nao_operacionais, field) + value
+                )
+            else:
+                self.saidas_operacionais.outros += value
+
+        self.entradas.entradas_operacionais = sum(
+            value for _, value in self.entradas_operacionais
+            if isinstance(value, (int, float))
+        )
+        self.entradas.entradas_nao_operacionais = sum(
+            value for _, value in self.entradas_nao_operacionais
+            if isinstance(value, (int, float))
+        )
+        self.saidas.saidas_operacionais = sum(
+            value for _, value in self.saidas_operacionais
+            if isinstance(value, (int, float))
+        )
+        self.saidas.saidas_nao_operacionais = sum(
+            value for _, value in self.saidas_nao_operacionais
+            if isinstance(value, (int, float))
+        )
+        self._loaded = True
+
+    def _get_initial_balance(self):
+        final_transactions = self.db.query(finantialsModels.Transactions)\
+            .filter(finantialsModels.Transactions.company_id == self.company_id)\
+            .filter(finantialsModels.Transactions.transaction_date <= self.date_end_dt)\
+            .all()
+
+        initial_transactions = self.db.query(finantialsModels.Transactions)\
+            .filter(finantialsModels.Transactions.company_id == self.company_id)\
+            .filter(finantialsModels.Transactions.transaction_date <= self.date_begin_dt)\
+            .all()
+
+        def calculate_balances(transactions):
+            total = 0
+            balances_by_bank = {}
+
+            for item in transactions:
+                value = abs(item.value or 0)
+                signed_value = value if item.method else -value
+                total += signed_value
+
+                if item.bank_account_id is not None:
+                    balances_by_bank[item.bank_account_id] = (
+                        balances_by_bank.get(item.bank_account_id, 0) +
+                        signed_value
+                    )
+
+            return total, balances_by_bank
+
+        initial, initial_by_bank = calculate_balances(initial_transactions)
+        final, final_by_bank = calculate_balances(final_transactions)
+
+        bank_accounts = self.db.query(finantialsModels.Bank)\
+            .filter(finantialsModels.Bank.company_id == self.company_id)\
+            .order_by(finantialsModels.Bank.id)\
+            .all()
+
+        banks = [
+            finantialsSchemas.DFCBankBalance(
+                bank_id=bank.id,
+                bank_name=bank.bank_name,
+                bank_code=bank.bank_code,
+                agency=bank.agency,
+                account_number=bank.account_number,
+                account_digit=bank.account_digit,
+                saldo_inicial=initial_by_bank.get(bank.id, 0),
+                saldo_final=final_by_bank.get(bank.id, 0),
+            )
+            for bank in bank_accounts
+        ]
+
+        return initial, final, banks
+
+
+    def _load_future(self):
+        # entradas de vendas
+        def get_sales():
+            from ..routers.mercado_livre import get_releases
+            releases = get_releases(company_id=self.company_id, date=self.future_date_dt)
+            n = 0
+            futures = []
+            for k, v in releases['per_day'].items():
+                future_sales = finantialsSchemas.DFCFutureSales()
+                n += v
+                future_sales.date = k
+                future_sales.value = v
+                futures.append(future_sales)
+            return n, futures
+
+        def get_suppliers():
+            query = self.db.query(suppliersModels.SupplierPayments)\
+                    .filter(suppliersModels.SupplierPayments.company_id == self.company_id)\
+                    .filter(suppliersModels.SupplierPayments.vencimento >= self.date_end_dt)\
+                    .filter(suppliersModels.SupplierPayments.vencimento <= self.future_date_dt).all()
+
+            futures = []
+            n = 0
+            for item in query:
+                future_payments = finantialsSchemas.DFCFutureSales()
+                future_payments.value = item.valor
+                future_payments.date = item.vencimento
+                futures.append(future_payments)
+                n += item.valor
+
+            return n, futures
+
+
+        def get_taxes():
+            query = self.db.query(finantialsModels.Taxes)\
+                    .filter(finantialsModels.Taxes.company_id == self.company_id)\
+                    .filter(finantialsModels.Taxes.payment_date >= self.date_end_dt)\
+                    .filter(finantialsModels.Taxes.payment_date <= self.future_date_dt).all()
+
+            futures = []
+            n = 0
+            for item in query:
+                future_tax = finantialsSchemas.DFCFutureSales()
+                future_tax.value = item.value
+                future_tax.date = item.payment_date
+                futures.append(future_tax)
+                n += item.value
+
+            return n, futures
+
+        def get_payroll():
+            query = self.db.query(accountModels.EmployeePayroll)\
+                    .filter(accountModels.EmployeePayroll.company_id == self.company_id)\
+                    .filter(accountModels.EmployeePayroll.data_vencimento >= self.date_end)\
+                    .filter(accountModels.EmployeePayroll.data_vencimento <= self.future_date).all()
+
+            futures = []
+            n = 0
+            for item in query:
+                future_payroll = finantialsSchemas.DFCFutureSales()
+                future_payroll.value = item.salario_liquido
+                future_payroll.date = item.data_vencimento
+                futures.append(future_payroll)
+                n += item.salario_liquido
+
+            return n, futures
+
+        future = finantialsSchemas.DFCFuture()
+        future.entrada_vendas, future.vendas_details = get_sales()
+        future.pagamentos_fornecedores, future.fornecedores_details = get_suppliers()
+        future.impostos, future.impostos_details = get_taxes()
+        future.folha_salarial, future.folha_salarial_details = get_payroll()
+
+
+        # custos fixos (previsão de impostos, folha, fornecedores)
+
+        # pagamentos emprestimos, parcelas
+        return future
+
+    def get_cashflow(self, show_details=False):
+        if not self._loaded:
+            self._load_transactions()
+
+        initial_balance, final_balance, banks_details = self._get_initial_balance()
+        total_entries = (
+            self.entradas.entradas_operacionais +
+            self.entradas.entradas_nao_operacionais
+        )
+        total_outputs = (
+            self.saidas.saidas_operacionais +
+            self.saidas.saidas_nao_operacionais
+        )
+
+        self.entradas.entradas_operacionais_details = (
+            self.entradas_operacionais if show_details else None
+        )
+        self.entradas.entradas_nao_operacionais_details = (
+            self.entradas_nao_operacionais if show_details else None
+        )
+        self.saidas.saidas_operacionais_details = (
+            self.saidas_operacionais if show_details else None
+        )
+        self.saidas.saidas_nao_operacionais_details = (
+            self.saidas_nao_operacionais if show_details else None
+        )
+
+        operational_balance = (
+            self.entradas.entradas_operacionais -
+            self.saidas.saidas_operacionais
+        )
+        self.cashflow = finantialsSchemas.DFC(
+            saldo_inicial=initial_balance,
+            saldos_bancos=banks_details,
+            entradas=self.entradas,
+            total_entradas=total_entries,
+            saidas=self.saidas,
+            total_saidas=total_outputs,
+            saldo_operacional=operational_balance,
+            saldo_final=final_balance
+        )
+        if self.future_date_dt:
+            self.cashflow.future = self._load_future()
+            if not show_details:
+                self.cashflow.future.vendas_details = None
+                self.cashflow.future.fornecedores_details = None
+                self.cashflow.future.impostos_details = None
+                self.cashflow.future.folha_salarial_details = None
+        return self.cashflow
 
 
 class Bank:

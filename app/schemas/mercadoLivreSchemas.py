@@ -193,6 +193,7 @@ class MercadoLivreListingResponse(BaseModel):
 
 
 class MercadoLivreOrder(BaseModel):
+    company_id: Optional[int] = None
     order_id: Optional[str] = None
     listing_id: Optional[str] = None
     status: Optional[str] = None
@@ -219,6 +220,9 @@ class MercadoLivreOrder(BaseModel):
     shipping_status: Optional[str] = None
     date_created: Optional[str] = None
     installments: Optional[int] = None
+    payment_id: Optional[int] = None
+    money_release_date: Optional[datetime] = None
+    money_release_status: Optional[str] = None
 
 
 

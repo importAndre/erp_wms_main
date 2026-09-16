@@ -5,7 +5,7 @@ from ..oauth2 import get_current_user
 from ..server_config import API_URL
 import requests
 from typing import Optional, Union, List
-from ..services import userServices, mercadoLivreServices, productServices
+from ..services import userServices, mercadoLivreServices, productServices, orderServices
 from sqlalchemy.orm import Session
 from ..database import get_db
 from ..services import mercadoLivreServices
@@ -18,6 +18,12 @@ router = APIRouter(
     prefix="/mercado-livre",
     tags=["Mercado Livre"]
 )
+
+
+def _json_date(value):
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    return value
 
 
 @router.post("/register")
@@ -86,10 +92,13 @@ def get_listing(
 @router.get("/order/{order_id}", response_model=Union[mercadoLivreSchemas.MercadoLivreOrder, List[mercadoLivreSchemas.MercadoLivreOrder]])
 def get_order(
     order_id: str,
-    company_id: int
+    company_id: int,
+    db: Session = Depends(get_db)
 ) -> Union[mercadoLivreSchemas.MercadoLivreOrder, List[mercadoLivreSchemas.MercadoLivreOrder]]:
     order = mercadoLivreServices.MercadoLivreOrder(order_id=order_id, cid=company_id)
-    return order.get_order()
+    data = order.get_order()
+    orderServices.Order.save_ml_orders(data, db)
+    return data
 
 @router.get("/orders", response_model=List[mercadoLivreSchemas.MercadoLivreOrder])
 def get_orders(
@@ -97,20 +106,24 @@ def get_orders(
     company_id: int,
     date_begin: Optional[str] = None,
     date_end: Optional[str] = None,
-    current_user=Depends(get_current_user)
+    money_release_status: Optional[str] = None,
+    # current_user=Depends(get_current_user)
 ) -> List[mercadoLivreSchemas.MercadoLivreOrder]:
     url = f'{API_URL}/mercado-livre/orders/'
     body = {
         "company_id": company_id,
-        "date_begin": date_begin,
-        "date_end": date_end
+        "date_begin": _json_date(date_begin),
+        "date_end": _json_date(date_end),
+        "money_release_status": money_release_status
     }
 
-    req = requests.post(url=url, json=body)
+
+    req = requests.post(url=url, json=body, timeout=60)
     if req.status_code == 200:
         data = req.json()
         # return data
         return [mercadoLivreSchemas.MercadoLivreOrder.model_validate(d) for d in data]
+    return []
     
 @router.get("/infos")
 def get_infos(
@@ -127,7 +140,7 @@ def get_infos(
         "date_end": date_end,
         "listing_id": listing_id
     }
-    print(body)
+    # print(body)
 
     req = requests.post(url=url, json=body)
     if req.status_code == 200:
@@ -240,6 +253,8 @@ def create_listing_dict(listing, product):
     result = calculate_taxes(price=listing.price, revenue=listing.liq_revenue, cmv=product.price_after_taxes, dict_to_update=result)
     return result
 
+
+# versão antiga
 def calculate_taxes(price, revenue, cmv, dict_to_update):
     icms_saida = price * 18 / 100
     pis_saida = (price - icms_saida) * 1.65 / 100
@@ -252,6 +267,36 @@ def calculate_taxes(price, revenue, cmv, dict_to_update):
     dict_to_update["gross"] = gross
     dict_to_update["profit"] = profit
     return dict_to_update
+
+# versão bolico
+# def calculate_taxes(price, revenue, cmv, dict_to_update):
+#     icms_rate = 0.18
+#     pis_rate = 0.0165
+#     cofins_rate = 0.076
+
+#     icms_saida = price * icms_rate
+
+#     pis_cofins_base = (
+#         (price - icms_saida)
+#         / (1 + pis_rate + cofins_rate)
+#     )
+
+#     pis_saida = pis_cofins_base * pis_rate
+#     cofins_saida = pis_cofins_base * cofins_rate
+
+#     gross = revenue - cmv
+#     profit = gross - icms_saida - pis_saida - cofins_saida
+
+#     dict_to_update.update({
+#         "pis_cofins_base": pis_cofins_base,
+#         "icms_saida": icms_saida,
+#         "pis_saida": pis_saida,
+#         "cofins_saida": cofins_saida,
+#         "gross": gross,
+#         "profit": profit,
+#     })
+
+#     return dict_to_update
 
 
 def calculate_new_taxes(price: float, listing: str, sku: str, company_id: int):
@@ -347,3 +392,53 @@ def upload_invoice_xml(
     )
 
     return req.json()
+
+
+
+@router.get("/releases")
+def get_releases(
+    company_id: int,
+    date: Optional[datetime.datetime] = None
+):
+    orders = get_orders(company_id=company_id, money_release_status='pending')
+    sales_result = []
+    daily_result = {}
+    for item in orders:
+        if item.status == 'cancelled' or item.money_release_date is None:
+            continue
+        if date:
+            limit_date = date
+            release_date = item.money_release_date
+
+            if limit_date.tzinfo is None and release_date.tzinfo is not None:
+                limit_date = limit_date.replace(tzinfo=release_date.tzinfo)
+            elif limit_date.tzinfo is not None and release_date.tzinfo is None:
+                release_date = release_date.replace(tzinfo=limit_date.tzinfo)
+
+            if limit_date < release_date:
+                continue
+
+        sales_result.append(
+            {
+                "order_id": item.order_id,
+                "release_date": item.money_release_date,
+                "value": item.total_received
+            }
+        )
+        hour_key = item.money_release_date.replace(
+            minute=0,
+            second=0,
+            microsecond=0
+        ).isoformat()
+        daily_result[hour_key] = (
+            daily_result.get(hour_key, 0) +
+            (item.total_received or 0)
+        )
+
+    daily_result = dict(sorted(daily_result.items()))
+
+
+    return {
+        "per_day": daily_result,
+        "per_sell": sales_result
+    }

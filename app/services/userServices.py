@@ -38,9 +38,9 @@ class User:
             return
         query = self.db.query(accountModels.User).filter(accountModels.User.id == self.user_id).first()
         # print(f"searching user:", self.user_id)
-        if not query:
-            # raise AttributeError(f"User {self.user_id} not found")
-            query = self.db.query(accountModels.User).filter(accountModels.User.id == 6).first()
+        # if not query:
+        #     # raise AttributeError(f"User {self.user_id} not found")
+        #     query = self.db.query(accountModels.User).filter(accountModels.User.id == 6).first()
 
         self._user = query
         self._load_permissions()
@@ -61,10 +61,25 @@ class User:
         )
 
     def get_employee(self):
-        e = self.db.query(accountModels.Employee).filter(accountModels.Employee.user_id == self._user.id).first()
+        # print('here')
+        e = (
+            self.db.query(accountModels.Employee)
+            .filter(accountModels.Employee.user_id == self._user.id)
+            .first()
+        )
+
         if not self._user.employee_id and e:
+            print('here')
             self._user.employee_id = e.id
             self._user.is_employee = True
+
+            try:
+                self.db.commit()
+                self.db.refresh(self._user)
+            except Exception:
+                self.db.rollback()
+                raise
+
         self.employee = e
         return self.employee
     

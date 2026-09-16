@@ -1,4 +1,5 @@
 from ..models.accountModels import Employee as EmployeeModel
+from ..models.accountModels import User as UserModel
 from ..models.accountModels import EmployeePayroll, EmployeePayrollItem
 from ..schemas import employeesSchemas
 from sqlalchemy.orm import Session
@@ -41,6 +42,14 @@ class Employee:
         if query:
             for column in EmployeeModel.__table__.columns:
                 setattr(self, column.name, getattr(query, column.name))
+        
+        if self.user_id:
+            user = self.db.query(UserModel).filter(UserModel.id == self.user_id).first()
+            if user and not user.employee_id:
+                user.is_employee = True
+                user.employee_id = self.emp_id
+                self.db.commit()
+                self.db.refresh(user)
 
     def get_employee(self, refresh=False):
         if refresh or not self.id:

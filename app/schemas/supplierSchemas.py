@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Any, List, Optional
 from datetime import datetime
 
@@ -77,12 +77,18 @@ class GetSupplierPayment(BaseModel):
 
 
 class Payments(BaseModel):
+    id: Optional[int] = None
+    company_id: Optional[int] = None
+    supplier_id: Optional[int] = None
+    transaction_id: Optional[int] = None
+    chave_acesso: Optional[str] = None
     numero_nota: Optional[str] = None
     parcela: Optional[int] = None
     quantidade_parcelas: Optional[int] = None
     valor: Optional[float] = None
     vencimento: Optional[datetime] = None
     date_emit: Optional[datetime] = None
+    data_pagamento: Optional[datetime] = None
     supplier: Optional[SupplierResponse] = None
 
 
@@ -91,6 +97,40 @@ class SupplierPaymentsResponse(BaseModel):
     quantidade_pagamentos: int = 0
     notas_pendentes: int = 0
     payments: List[Payments] = Field(default_factory=list)
+
+
+class SupplierPaymentManualCreate(BaseModel):
+    company_id: int
+    supplier_id: int
+    transaction_id: Optional[int] = None
+    chave_acesso: str
+    numero_nota: str
+    parcela: int = Field(default=1, ge=1)
+    quantidade_parcelas: int = Field(default=1, ge=1)
+    valor: float = Field(ge=0)
+    date_emit: Optional[datetime] = None
+    vencimento: Optional[datetime] = None
+    data_pagamento: Optional[datetime] = None
+
+
+class SupplierPaymentUpdate(BaseModel):
+    company_id: Optional[int] = None
+    supplier_id: Optional[int] = None
+    transaction_id: Optional[int] = None
+    chave_acesso: Optional[str] = None
+    numero_nota: Optional[str] = None
+    parcela: Optional[int] = Field(default=None, ge=1)
+    quantidade_parcelas: Optional[int] = Field(default=None, ge=1)
+    valor: Optional[float] = Field(default=None, ge=0)
+    date_emit: Optional[datetime] = None
+    vencimento: Optional[datetime] = None
+    data_pagamento: Optional[datetime] = None
+
+
+class SupplierPaymentManualResponse(SupplierPaymentManualCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
 
 
 class PurchaseBase(BaseModel):
@@ -122,3 +162,70 @@ class SupplierProductsResponse(BaseModel):
     total_units: float = 0
     distinct_products: int = 0
     products: List[Any] = Field(default_factory=list)
+
+
+class SupplierOrderItemCreate(BaseModel):
+    is_composition: bool = False
+    product_id: Optional[int] = None
+    composition_id: Optional[int] = None
+    quantity: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_product_reference(self):
+        if self.is_composition:
+            if self.composition_id is None or self.product_id is not None:
+                raise ValueError(
+                    "Itens de composição devem informar somente composition_id"
+                )
+        elif self.product_id is None or self.composition_id is not None:
+            raise ValueError(
+                "Itens de produto devem informar somente product_id"
+            )
+        return self
+
+
+class SupplierOrderCreate(BaseModel):
+    company_id: int
+    invoice_id: Optional[int] = None
+    supplier_internal_code: str = Field(min_length=1)
+    arrived_percent: float = Field(default=0, ge=0, le=100)
+    invoice_emit: Optional[datetime] = None
+    date_expected: Optional[datetime] = None
+    arrived_at: Optional[datetime] = None
+    items: List[SupplierOrderItemCreate] = Field(min_length=1)
+
+
+class SupplierOrderUpdate(BaseModel):
+    invoice_id: Optional[int] = None
+    arrived_percent: Optional[float] = Field(default=None, ge=0, le=100)
+    invoice_emit: Optional[datetime] = None
+    date_expected: Optional[datetime] = None
+    arrived_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def validate_update_fields(self):
+        if not self.model_fields_set:
+            raise ValueError("Informe ao menos um campo para atualizar")
+        return self
+
+
+class SupplierOrderItemResponse(SupplierOrderItemCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    order_id: int
+
+
+class SupplierOrderResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    company_id: int
+    invoice_id: Optional[int] = None
+    supplier_internal_code: str
+    arrived_percent: float
+    invoice_emit: Optional[datetime] = None
+    date_expected: Optional[datetime] = None
+    arrived_at: Optional[datetime] = None
+    created_at: datetime
+    items: List[SupplierOrderItemResponse] = Field(default_factory=list)

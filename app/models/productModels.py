@@ -39,7 +39,9 @@ class ProductHistoricalPrices(Base):
     product_id = Column(Integer, ForeignKey("DimProducts.id"), nullable=False)
     last_entry_price = Column(Float, nullable=True)
     price_after_taxes = Column(Float, nullable=True)
-    stock_unit_price = Column(Float, nullable=True)    
+    stock_unit_price = Column(Float, nullable=True) 
+    created_at = Column(TIMESTAMP(timezone=True), server_default=text('now()')) 
+
 
 
 # class ProductIdentificator(Base):

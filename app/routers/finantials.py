@@ -101,8 +101,32 @@ def register_payment(
     db.refresh(new_payment)
     return new_payment
 
-last_bp = None
-@router.get("/balance")
+balance_cache = {}
+dre_cache = {}
+
+
+def _report_cache_key(
+    company_id: int,
+    date_begin: date,
+    date_end: date,
+    show_details: bool
+):
+    return (
+        company_id,
+        date_begin.isoformat(),
+        date_end.isoformat(),
+        bool(show_details)
+    )
+
+
+def _save_report_cache(cache: dict, key: tuple, value, max_items: int = 100):
+    if key not in cache and len(cache) >= max_items:
+        oldest_key = next(iter(cache))
+        cache.pop(oldest_key)
+    cache[key] = value
+
+
+@router.get("/balance", response_model=finantialsSchemas.BalancoPatrimonial)
 def get_balance(
     company_id: int,
     date_begin: date,
@@ -110,162 +134,75 @@ def get_balance(
     show_details: Optional[bool] = False,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
-):
-    global last_bp
-    if not last_bp:
-        last_bp = finantialServices.PatrimonialBalance(
+) -> finantialsSchemas.BalancoPatrimonial:
+    cache_key = _report_cache_key(
+        company_id=company_id,
+        date_begin=date_begin,
+        date_end=date_end,
+        show_details=show_details
+    )
+    if cache_key in balance_cache:
+        return balance_cache[cache_key]
+
+    balance = finantialServices.PatrimonialBalance(
         company_id=company_id,
         date_begin=date_begin,
         date_end=date_end,
         db=db
-        ).get_balance(show_details=show_details)
-    return last_bp
+    ).get_balance(show_details=show_details)
+
+    _save_report_cache(balance_cache, cache_key, balance)
+    return balance
 
 
-
-# last_dre = None
-@router.get("/dre")
+@router.get("/dre", response_model=finantialsSchemas.DRE)
 def get_dre(
     company_id: int,
     date_begin: date,
     date_end: date,
     show_details: Optional[bool] = False,
+    desired_margin: Optional[float] = 10,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
-):
-    # global last_dre
-    # if not last_dre:
-    last_dre = finantialServices.Dre(
+) -> finantialsSchemas.DRE:
+    cache_key = _report_cache_key(
+        company_id=company_id,
+        date_begin=date_begin,
+        date_end=date_end,
+        show_details=show_details
+    )
+    if cache_key in dre_cache:
+        return dre_cache[cache_key]
+
+    dre = finantialServices.Dre(
         company_id=company_id,
         date_begin=date_begin,
         date_end=date_end,
         db=db
-    ).get_dre(show_details=show_details)
-    return last_dre
+    ).get_dre(show_details=show_details, desired_margin=desired_margin)
+
+    _save_report_cache(dre_cache, cache_key, dre)
+    return dre
 
 
-@router.get("/fix-stock")
-def fix_stock(
+@router.get("/cash-flow", response_model=finantialsSchemas.DFC)
+def get_cash_flow(
     company_id: int,
+    date_begin: date,
+    date_end: date,
+    future_date: Optional[date] = None,
+    show_details: Optional[bool] = False,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
-):
-    company = companyServices.Company(company_id=company_id, db=db).get_company()
+) -> finantialsSchemas.DFC:
+    return finantialServices.CashFlow(
+        company_id=company_id,
+        date_begin=date_begin,
+        date_end=date_end,
+        future_date=future_date,
+        db=db
+    ).get_cashflow(show_details=show_details)
 
-    suppliers = db.query(suppliersModels.Suppliers).all()
-    sup_cnpjs = [s.cnpj for s in suppliers]
-
-
-    d_begin = '2025-12-01'
-
-    compras = get_invoices(cnpj=company.cnpj, date_begin=d_begin)['invoices']
-    vendas = get_invoices(cnpj=company.cnpj, date_begin=d_begin, emit=True)['invoices']
-
-
-    result = []
-    for c in compras:
-        nf_schema = finantialsSchemas.InvoiceBase.model_validate(c)
-        for i in nf_schema.items:
-            prod = get_product_by_cprod(c_prod=i.c_prod, sup_cnpj=nf_schema.cnpj_emit, db=db)
-            if not prod:
-                continue
-            if isinstance(prod, productSchemas.ProductResponse):
-                result.append(
-                    {
-                        "data": nf_schema.dh_emissao,
-                        "product": prod,
-                        "amount": i.q_com
-                    }
-                )
-            elif isinstance(prod, compositionSchemas.CompositionResponse):
-                for item in prod.items:
-                    result.append(
-                        {
-                            "data": nf_schema.dh_emissao,
-                            "product": item.product,
-                            "amount": i.q_com / item.amount_required
-                        }
-                    )
-
-
-    from .products import search_by_sku
-    for v in vendas:
-        nf_schema = finantialsSchemas.InvoiceBase.model_validate(v)
-        for i in nf_schema.items:
-            prod = search_by_sku(sku=i.c_prod, db=db, refresh=False)
-            if isinstance(prod, productSchemas.ProductResponse):
-                result.append(
-                    {
-                        "data": nf_schema.dh_emissao,
-                        "product": prod,
-                        "amount": (i.q_com) * (-1)
-                    }
-                )
-            elif isinstance(prod, compositionSchemas.CompositionResponse):
-                for item in prod.items:
-                    result.append(
-                        {
-                            "data": nf_schema.dh_emissao,
-                            "product": item.product,
-                            "amount": (i.q_com / item.amount_required) * (-1)
-                        }
-                    )
-
-
-    return process_result(result)
-            
-
-def process_result(data):
-    result = {}
-    for item in data:
-        raw_date = item["data"]
-
-        if isinstance(raw_date, datetime):
-            only_date = raw_date.date()
-        elif isinstance(raw_date, date):
-            only_date = raw_date
-        elif isinstance(raw_date, str):
-            only_date = datetime.fromisoformat(raw_date).date()
-        else:
-            raise TypeError(f"Tipo inválido para data: {type(raw_date)} - valor: {raw_date}")
-
-        if only_date not in result:
-            result[only_date] = [
-                {
-                    "sku": item["product"].sku,
-                    "pid": item["product"].id,
-                    "amount": item["amount"]
-                }
-            ]
-        else:
-            result[only_date].append(
-                {
-                    "sku": item["product"].sku,
-                    "pid": item["product"].id,
-                    "amount": item["amount"]
-                }
-            )
-
-    final_result = {}
-    for day in result:
-        final_result[day] = sum_quantities(result[day])
-
-
-
-
-
-    return final_result
-
-
-def sum_quantities(data):
-    result = {}
-    for item in data:
-        if item['sku'] not in result:
-            result[item['sku']] = item
-        else:
-            result[item['sku']]['amount'] += item['amount']
-
-    return result
 
 
 def get_product_by_cprod(c_prod, sup_cnpj, db: Session = Depends(get_db)):
@@ -489,6 +426,14 @@ async def register_extract(
             elif str(model.counterparty_name).replace("/", "").replace("-", "") in suppliers_cnpjs:
                 model.category = 1
             
+            elif 'RENDIMENTOS REND PAGO APLIC AUT MAIS' == str(model.counterparty_name):
+                model.category = 10
+            elif 'REND PAGO APLIC AUT MAIS' == str(model.counterparty_name):
+                model.category = 10
+            elif 'RENDIMENTOS REND PAGO APLIC AUT MAIS' == str(model.counterparty_name):
+                model.category = 10
+            
+            
             
             db.add(model)
             db.commit()
@@ -499,22 +444,37 @@ async def register_extract(
         return models
     
     elif bank.bank_name == "Mercado Pago":
-        df = pd.read_csv(
-            excel,
-            skiprows=2,
-            sep=";",
-            decimal=",",
-            thousands=".",
-            dtype={
-                "REFERENCE_ID": str
-            }
-        )
+        read_options = {
+            "skiprows": 2,
+            "sep": ";",
+            "decimal": ",",
+            "thousands": ".",
+            "dtype": {"REFERENCE_ID": str},
+        }
+
+        try:
+            df = pd.read_csv(excel, encoding="utf-8-sig", **read_options)
+        except UnicodeDecodeError:
+            # Alguns extratos do Mercado Pago chegam codificados como Windows-1252.
+            excel.seek(0)
+            try:
+                df = pd.read_csv(excel, encoding="cp1252", **read_options)
+            except UnicodeDecodeError:
+                # Latin-1 aceita bytes indefinidos no CP1252 (como 0x81), que
+                # podem aparecer quando o arquivo é recodificado no upload.
+                excel.seek(0)
+                df = pd.read_csv(excel, encoding="latin-1", **read_options)
 
         df.columns = df.columns.str.strip()
+        # print(df)
 
 
         for _, row in df.iterrows():
-            reference_id = str(row["REFERENCE_ID"]).strip()
+            try:
+                reference_id = str(row["REFERENCE_ID"]).strip()
+            except KeyError:
+                reference_id = str(row["SOURCE_ID"]).strip()
+
             transaction_type = str(row["TRANSACTION_TYPE"]).strip()
             transaction_value = float(row["TRANSACTION_NET_AMOUNT"])
 
@@ -541,10 +501,9 @@ async def register_extract(
                 source="mercado_pago"
             )
 
-            if category:
-                model.category = category
 
             model.counterparty_name = model.description
+
 
             if transaction_value > 0:
                 model.method = True
@@ -552,6 +511,23 @@ async def register_extract(
             else:
                 model.method = False
                 model.value = transaction_value * -1
+
+            if category:
+                model.category = category
+            else:
+                if 'Pagamento com Código QR Pix' in model.counterparty_name and model.method:
+                    model.category = 9
+                elif 'Pix recebido' in model.counterparty_name and model.method:
+                    model.category = 9
+                elif 'Liberação de dinheiro Venda' in model.counterparty_name and model.method:
+                    model.category = 9
+                elif 'Reembolso' in model.counterparty_name and model.method and 'DIFAL' not in model.counterparty_name:
+                    model.category = 15
+                elif 'canceled' in model.counterparty_name and not model.method:
+                    model.category = 13
+                elif 'Transferência Pix recebida' in model.counterparty_name and not model.method:
+                    model.category = 9
+
 
             db.add(model)
 
@@ -589,6 +565,7 @@ async def register_extract(
 def get_extract(
     company_id: int,
     bank_id: Optional[int] = None,
+    category_id: Optional[int] = None,
     date_begin: Optional[datetime] = None,
     date_end: Optional[datetime] = None,
     db: Session = Depends(get_db)
@@ -612,6 +589,11 @@ def get_extract(
             finantialsModels.Transactions.bank_account_id == bank_id
         )
 
+    if category_id is not None:
+        filters.append(
+            finantialsModels.Transactions.category == category_id
+        )
+
     # filters.append(finantialsModels.Transactions.category.is_(None))
 
     # filters.append(
@@ -625,6 +607,25 @@ def get_extract(
 
     return query
 
+
+@router.put("/edit-transaction")
+def update_transaction(
+    new_transaction: finantialsSchemas.EditTransaction,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    print("new_transaction", new_transaction)
+    query = db.query(finantialsModels.Transactions).filter(finantialsModels.Transactions.id == new_transaction.transaction_id).first()
+    if not query:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if new_transaction.counterparty_document:
+        query.counterparty_document = new_transaction.counterparty_document
+
+    db.commit()
+    db.refresh(query)
+
+    return query
+    
 
 @router.get("/categories")
 def get_categories(
@@ -731,6 +732,17 @@ def attribute_payment(
             if query:
                 query.transaction_id = transaction.id
                 query.data_pagamento = transaction.transaction_date
+                query.paid = True
+                if not query.data_competencia:
+                    ultimo_dia = monthrange(
+                        query.ano_referencia,
+                        query.mes_referencia
+                    )[1]
+                    query.data_competencia = datetime(
+                        year=query.ano_referencia,
+                        month=query.mes_referencia,
+                        day=ultimo_dia
+                    )
 
         else:
             raise HTTPException(
@@ -795,7 +807,10 @@ def search_item(
     transaction_date = normalize_date(transaction.transaction_date)
 
     def search_supplier(cnpj: str) -> int:
-        cnpj = cnpj.replace("/", '').replace('-', '') 
+        try:
+            cnpj = cnpj.replace("/", '').replace('-', '') 
+        except:
+            return None
         query = db.query(suppliersModels.Suppliers).filter(suppliersModels.Suppliers.cnpj == cnpj).first()
         if query:
             return query.id
@@ -827,6 +842,11 @@ def search_item(
                     }
 
         supplier = search_supplier(cnpj=transaction.counterparty_document)
+        if not supplier:
+            return {
+            "has_motive": False,
+            "motive": []
+        }
         query = db.query(suppliersModels.SupplierPayments).filter(suppliersModels.SupplierPayments.transaction_id.is_(None))\
                 .filter(suppliersModels.SupplierPayments.supplier_id == supplier).all()
         return {

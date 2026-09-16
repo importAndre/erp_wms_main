@@ -3,7 +3,9 @@ from ..models import suppliersModels, productModels
 from ..schemas import supplierSchemas
 from sqlalchemy.orm import Session
 
-supplier_cnpjs = {}  # cnpj -> suppliersModels.Suppliers
+# Não armazene instâncias ORM neste cache: elas ficam vinculadas à sessão que
+# atendeu a requisição e tornam-se detached quando essa sessão é encerrada.
+supplier_cnpjs = {}  # cnpj -> supplier_id
 
 class Supplier:
     def __init__(
@@ -26,23 +28,35 @@ class Supplier:
 
         # tenta cache por CNPJ
         if self.cnpj:
-            cached = supplier_cnpjs.get(self.cnpj)
-            if cached:
-                self._supplier = cached
-                self.sid = cached.id
-                return
-
-            # fallback banco
+            cached_id = supplier_cnpjs.get(self.cnpj)
+            if cached_id is not None and not isinstance(cached_id, int):
+                # Descarta entradas criadas pela versão antiga do cache.
+                supplier_cnpjs.pop(self.cnpj, None)
+                cached_id = None
             query = (
                 self.db.query(suppliersModels.Suppliers)
-                .filter(suppliersModels.Suppliers.cnpj == self.cnpj)
+                .filter(
+                    suppliersModels.Suppliers.id == cached_id
+                    if cached_id is not None
+                    else suppliersModels.Suppliers.cnpj == self.cnpj
+                )
                 .first()
             )
+            if not query:
+                # O fornecedor pode ter sido removido ou o cache pode estar
+                # desatualizado; tenta novamente pelo CNPJ antes de falhar.
+                if cached_id is not None:
+                    supplier_cnpjs.pop(self.cnpj, None)
+                    query = (
+                        self.db.query(suppliersModels.Suppliers)
+                        .filter(suppliersModels.Suppliers.cnpj == self.cnpj)
+                        .first()
+                    )
             if not query:
                 raise AttributeError("Supplier not found")
             self._supplier = query
             self.sid = query.id
-            supplier_cnpjs[query.cnpj] = query
+            supplier_cnpjs[query.cnpj] = query.id
             return
 
         # busca por id
@@ -59,7 +73,7 @@ class Supplier:
 
         self._supplier = query
         self.cnpj = query.cnpj
-        supplier_cnpjs[query.cnpj] = query
+        supplier_cnpjs[query.cnpj] = query.id
 
     def get_supplier(self):
         if not self._supplier:

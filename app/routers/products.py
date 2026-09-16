@@ -1,15 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from ..models import productModels, compositionModels, identificatorsModels, stockModels
 from ..schemas import productSchemas
 from ..database import get_db
 from ..oauth2 import get_current_user
-from ..services import userServices, productServices, compositionServices
+from ..services import userServices, productServices, compositionServices, finantialServices
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Union
 import requests
 from ..server_config import API_URL
-
+from sqlalchemy import exists
 
 router = APIRouter(
     prefix="/products",
@@ -58,10 +58,14 @@ def create_product(
 PROCESSING = False
 PROCESSED = 0
 
-@router.get("/", response_model=Union[List[productSchemas.ProductResponse], Dict])
+@router.get(
+    "/", 
+    response_model=Union[List[productSchemas.ProductResponse], Dict]
+)
 def get_products(
     current_user=Depends(get_current_user),
     refresh: Optional[bool] = False,
+    stock_refresh: Optional[bool] = False,
     db: Session = Depends(get_db)
 ):
     global loaded_products
@@ -81,38 +85,47 @@ def get_products(
                 }
         for item in query:
             PROCESSING = True
-            loaded_products.append(productServices.Product(product=item, db=db).get_product(refresh=refresh))
+            loaded_products.append(productServices.Product(product=item, db=db, load_stock=stock_refresh).get_product(refresh=refresh))
             PROCESSED += 1
         PROCESSING = False
         PROCESSED = 0
     return loaded_products
 
-
-
-
-@router.get("/pid/{pid}", response_model=Union[productSchemas.ProductResponse, productSchemas.ProductAddressResponse])
+@router.get(
+    "/pid/{pid}", 
+    response_model=Union[productSchemas.ProductResponse, productSchemas.ProductAddressResponse]
+)
 def get_product(
     pid: int,
     address: Optional[bool] = False,
     date: Optional[datetime] = None,
+    historical_prices: Optional[bool] = False,
     refresh: Optional[bool] = None,
+    load_stock: Optional[bool] = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     if refresh:
-        prod = productServices.Product(pid=pid, db=db, load_stock=False)
-        # prod = productServices.Product(pid=pid, db=db, load_stock=True)
+        # prod = productServices.Product(pid=pid, db=db, load_stock=load_stock)
+        prod = productServices.Product(pid=pid, db=db, load_stock=True)
     else:
         prod = productServices.Product(pid=pid, db=db, load_stock=False)
+
+    if historical_prices:
+        prod.get_historical_price()
 
     if address:
         return prod.get_addresses()
     if date:
         return prod.get_product_date(date=date)
+    
 
     return prod.get_product(refresh=refresh)
 
-@router.put("/edit", response_model=productSchemas.ProductResponse)
+@router.put(
+    "/edit", 
+    response_model=productSchemas.ProductResponse
+)
 def edit_product(
     product: productSchemas.ProductEdit,
     current_user=Depends(get_current_user),
@@ -138,7 +151,9 @@ def edit_product(
 
 
 
-@router.get("/search/{sku}")
+@router.get(
+    "/search/{sku}"
+)
 def search_by_sku(
     sku: str,
     refresh: Optional[bool] = True,
@@ -158,8 +173,6 @@ def search_by_sku(
     return {"message": f"Product {sku} not found"}
 
 
-
-from sqlalchemy import exists
 
 @router.get("/not-identif")
 def get_not_identifs(
@@ -190,19 +203,21 @@ def get_product_date(
     prod = productServices.Product(pid=pid, db=db)
     # prod_response = prod.get_product()
     old_quantity = prod.get_product_date(date=date)
-    print(old_quantity)
+    # print(old_quantity)
 
     return old_quantity
 
 
-@router.get("/virtual/{pid}")
+@router.get("/virtual")
 def update_virtual_stock(
     pid: int,
+    date: Optional[datetime] = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)    
 ):
     from .mercado_livre import update_virtual_stock
-
+    if not date:
+        date = datetime.now()
     product = productServices.Product(pid=pid, db=db).get_product()
     comps = []
 
@@ -210,11 +225,13 @@ def update_virtual_stock(
         url = f"{API_URL}/mercado-livre/listings/full-stock"
         params = {
             "company_id": company_id,
-            "sku": sku
+            "sku": sku,
+            "date": date
         }
         req = requests.get(url=url, params=params)
         if req.status_code == 200:
             data = req.json()
+            print(data)
             try:
                 return data[sku]['stock']
             except KeyError:
@@ -238,7 +255,7 @@ def update_virtual_stock(
         product_id=product.id,
         quantity=pid_full_stock,
         location='ml_fulfillment',
-        created_at=datetime.now()
+        created_at=date
     )
     print(new_move.product_id, new_move.quantity)
     db.add(new_move)
@@ -247,3 +264,76 @@ def update_virtual_stock(
     return new_move
 
 
+@router.get("/sales")
+def product_sales(
+    company_id: int,
+    product_id: Optional[List[int]] = Query(default=None),
+    date_begin: Optional[datetime] = None,
+    date_end: Optional[datetime] = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from .finantials import get_dre
+    products = []
+    if product_id:
+        for item in product_id:
+            products.append(productServices.Product(pid=item, db=db))
+    else:
+        query = db.query(productModels.Product).filter(productModels.Product.company_id == company_id).all()
+        for item in query:
+            products.append(productServices.Product(pid=item.id, db=db))
+    # dre = finantialServices.Dre(company_id=company_id, date_begin=date_begin, date_end=date_end, db=db).get_dre()
+    dre = get_dre(
+            company_id=company_id,
+            date_begin=date_begin,
+            date_end=date_end,
+            current_user=current_user,
+            db=db,
+    )
+
+    result = {}
+    for p in products:
+        if date_end:
+            atual = p.get_product_date(date=date_end)
+        else:
+            atual = p.get_product()
+        purchases = p.get_purchases(date_begin=date_begin, date_end=date_end)
+        old = p.get_product_date(date=date_begin)
+        sales = p.get_sales(date_begin=date_begin, date_end=date_end)
+        # print(p.sku, len(sales.invoices))
+        revenue_percentage = sales.v_prod / dre.faturamento
+        result[atual.sku] = {
+            "product": atual,
+            "old_product": old,
+            "sold_quantity": sales.quantity,
+            "total_revenue": sales.v_prod,
+            "bought_quantity": purchases.quantity,
+            "bought_value": purchases.v_prod,
+            "old_stock": old.stock_value,
+            "old_stock_qt": old.stock,
+            "current_stock": atual.stock_value,
+            "current_stock_qt": atual.stock,
+            "cmv": old.stock_value + purchases.v_prod - atual.stock_value,
+            "revenue_percentage": revenue_percentage,
+            "gross_profit": dre.lucro_bruto * revenue_percentage,
+            "liquid_profit": dre.lucro_operacional * revenue_percentage
+        }
+
+    return result
+
+
+
+@router.get("/mktplace-sales/{product_id}")
+def get_mkt_place_sales(
+    product_id: int,
+    date_begin: Optional[datetime] = None,
+    date_end: Optional[datetime] = None,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    prod_obj = productServices.Product(pid=product_id, db=db)
+    prod = prod_obj.get_product()
+    compositions_ids = db.query(compositionModels.CompositionItems).filter(compositionModels.CompositionItems.product_id == product_id).all()
+    comps = db.query(compositionModels.Composition).filter(compositionModels.Composition.id.in_([c.composition_id for c in compositions_ids])).all()
+    skus = [prod.sku]
+    skus.append([comp.sku for comp in comps])

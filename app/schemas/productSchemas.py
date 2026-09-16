@@ -29,6 +29,11 @@ class ProductAddIdentif(BaseModel):
 class IdentifResponse(ProductAddIdentif):
     id: Optional[int] = None
 
+class ProductHistoricalPrices(BaseModel):
+    last_entry_price: Optional[float] = None
+    price_after_taxes: Optional[float] = None
+    stock_unit_price: Optional[float] = None
+    created_at: Optional[datetime] = None
 
 class ProductResponse(ProductBase):
     id: Optional[int] = None
@@ -51,6 +56,7 @@ class ProductResponse(ProductBase):
     updated_at: Optional[datetime] = None
     supplier: Optional[SupplierResponse] = None
     identificators: Optional[List[IdentifResponse]] = None
+    historial_prices: Optional[List[ProductHistoricalPrices]] = []
 
 
 class ProductEdit(BaseModel):
@@ -69,3 +75,5 @@ class AddressProduct(AddressResponse):
 class ProductAddressResponse(BaseModel):
     product: Optional[ProductResponse] = None
     addresses: List[AddressProduct] = Field(default_factory=list)
+
+

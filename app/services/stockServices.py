@@ -107,14 +107,20 @@ class Address:
             .filter(stockModels.AddressProducts.product_id == movement.product_id).first()
 
         if query:
+            # print(query.quantity, movement.quantity)
+            if query.quantity < 0:
+                print(query)
+                self.db.delete(query)
+                self.db.commit()
+                return
             if movement.method:
                 query.quantity += movement.quantity
             else:
-                # if query.quantity < movement.quantity:
-                #     raise HTTPException(
-                #         status_code=status.HTTP_400_BAD_REQUEST,
-                #         detail="Insufficient stock at address"
-                    # )
+                if query.quantity < movement.quantity:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Insufficient stock at address"
+                    )
                 query.quantity -= movement.quantity
                 if query.quantity == 0:
                     self.db.delete(query)
@@ -126,10 +132,10 @@ class Address:
 
         else:
             if not movement.method:
-                # raise HTTPException(
-                #     status_code=status.HTTP_400_BAD_REQUEST,
-                #     detail="Product not found at address for stock removal"
-                # )
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Product not found at address for stock removal"
+                )
                 movement.quantity *= -1
 
             new_product = stockModels.AddressProducts(

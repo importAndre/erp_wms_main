@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from datetime import datetime
 
@@ -26,11 +26,14 @@ class EmployeeRegister(EmployeeBase):
     pass
 
 
-class EmployeeResponse(EmployeeBase):
-    id: Optional[int] = None
+class EmployeeUpdate(EmployeeBase):
+    pass
 
-    class Config:
-        orm_mode = True
+
+class EmployeeResponse(EmployeeBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: Optional[int] = None
 
 class EmployeePayrollItemBase(BaseModel):
     codigo: Optional[str] = None
@@ -45,10 +48,9 @@ class EmployeePayrollItemCreate(EmployeePayrollItemBase):
 
 
 class EmployeePayrollItemResponse(EmployeePayrollItemBase):
-    id: int
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        orm_mode = True
+    id: int
 
 
 class EmployeePayrollBase(BaseModel):
@@ -82,9 +84,8 @@ class EmployeePayrollCreate(EmployeePayrollBase):
 
 
 class EmployeePayrollResponse(EmployeePayrollBase):
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     employee: Optional[EmployeeResponse] = None
     items: List[EmployeePayrollItemResponse] = []
-
-    class Config:
-        orm_mode = True
