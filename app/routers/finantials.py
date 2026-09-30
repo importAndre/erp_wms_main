@@ -15,6 +15,8 @@ from .suppliers import get_payments
 from .mercado_livre import get_infos
 import pandas as pd
 from io import BytesIO
+from decimal import Decimal, InvalidOperation
+import re
 from sqlalchemy import or_
 
 router = APIRouter(
@@ -155,7 +157,7 @@ def get_balance(
     return balance
 
 
-@router.get("/dre", response_model=finantialsSchemas.DRE)
+@router.get("/dre", response_model=finantialsSchemas.DreResultado)
 def get_dre(
     company_id: int,
     date_begin: date,
@@ -744,6 +746,14 @@ def attribute_payment(
                         day=ultimo_dia
                     )
 
+        elif transaction.category == 12:
+            query = db.query(suppliersModels.Purchases).filter(
+                suppliersModels.Purchases.id == attr.item_id
+            ).first()
+
+            if query:
+                query.transaction_id = transaction.id
+
         else:
             raise HTTPException(
                 status_code=400,
@@ -778,8 +788,91 @@ def attribute_payment(
         "transaction": transaction,
         **search_result
     }
-                
-                
+
+
+@router.post("/attribute-credit-card")
+def attribute_credit_card_item(
+    attr: finantialsSchemas.AttributeCreditCardItem,
+    db: Session = Depends(get_db),
+):
+    credit_card_item = db.query(finantialsModels.CreditCardItems).filter(
+        finantialsModels.CreditCardItems.id == attr.item_id
+    ).first()
+
+    if not credit_card_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Item do cartao de credito nao encontrado",
+        )
+
+    category_id = attr.category_id or credit_card_item.category
+    if not category_id:
+        raise HTTPException(status_code=400, detail="Informe a categoria do item")
+
+    category = db.query(finantialsModels.TransactionCategories).filter(
+        finantialsModels.TransactionCategories.id == category_id
+    ).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Categoria nao encontrada")
+
+    # O vinculo fica na entidade de destino, assim como transaction_id nas
+    # conciliacoes bancarias. Ao recategorizar, removemos o vinculo anterior.
+    target_models = {
+        1: suppliersModels.SupplierPayments,
+        2: finantialsModels.Taxes,
+        3: finantialsModels.Fixos,
+        4: accountModels.EmployeePayroll,
+        12: suppliersModels.Purchases,
+    }
+    for model in target_models.values():
+        db.query(model).filter(
+            model.credit_card_id == credit_card_item.id
+        ).update({model.credit_card_id: None}, synchronize_session=False)
+
+    credit_card_item.category = category_id
+
+    # if attr.motive_id is None:
+    #     db.commit()
+    #     db.refresh(credit_card_item)
+    #     return {
+    #         "credit_card_item": credit_card_item,
+    #         "has_motive": False,
+    #         "motive": None,
+    #     }
+
+    target_model = target_models.get(category_id)
+    if target_model is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Categoria nao possui motivo vinculavel",
+        )
+
+    motive = db.query(target_model).filter(
+        target_model.id == attr.motive_id
+    ).first()
+    if not motive:
+        raise HTTPException(
+            status_code=404,
+            detail="Motivo/item nao encontrado para essa categoria",
+        )
+
+    invoice = credit_card_item.fatura
+    if hasattr(motive, "company_id") and motive.company_id != invoice.company_id:
+        raise HTTPException(status_code=400, detail="Item pertence a outra empresa")
+
+    # Se o motivo estava em outro lancamento, o novo vinculo o substitui.
+    motive.credit_card_id = credit_card_item.id
+
+    db.commit()
+    db.refresh(credit_card_item)
+    db.refresh(motive)
+
+    return {
+        "credit_card_item": credit_card_item,
+        "has_motive": True,
+        "motive": motive,
+    }
+
 
 def normalize_date(value):
     if isinstance(value, datetime):
@@ -935,11 +1028,41 @@ def search_item(
             "motive": query
         }
 
+    elif transaction.category == 12:
+        purchase_query = db.query(suppliersModels.Purchases).filter(
+            suppliersModels.Purchases.transaction_id == transaction.id
+        ).all()
+        if purchase_query:
+            return {
+                "has_motive": True,
+                "motive": purchase_query
+            }
+
+
+        query = db.query(suppliersModels.Purchases).filter(
+            suppliersModels.Purchases.total_value == transaction.value,
+            suppliersModels.Purchases.company_id == transaction.company_id
+        ).all()
+
+
+        for item in query:
+            item_date = normalize_date(item.purchase_date)
+
+            if not item.transaction_id and item_date == transaction_date and not item.credit_card_id:
+                return {
+                    "has_motive": False,
+                    "motive": item
+                }
+
+        # return {
+        #     "has_motive": False,
+        #     "motive": [item for item in query if not item.transaction_id]
+        # }
+
     return {
         "has_motive": False,
         "motive": []
     }
-    
     
 @router.get("/motives/{category_id}")
 def get_motives(
@@ -1002,6 +1125,23 @@ def get_motives(
                 "category": "folha_salarial",
                 "payments": query
             }
+
+        elif category_id == 12:
+            filter_params = []
+
+            if date_begin:
+                filter_params.append(suppliersModels.Purchases.purchase_date >= date_begin)
+
+            if date_end:
+                filter_params.append(suppliersModels.Purchases.purchase_date <= date_end)
+
+            query = db.query(suppliersModels.Purchases).filter(*filter_params).all()
+
+            return {
+                "category": "folha_salarial",
+                "payments": query
+            }
+
 
         raise HTTPException(
             status_code=400,
@@ -1111,3 +1251,196 @@ def get_duplicated_invoices():
     # }
 
     return result_2
+
+
+@router.post("/upload-credit-card")
+async def upload_credit_card(
+    company_id: int,
+    bank_id: int,
+    file: UploadFile = File(...),
+    due_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+):
+    bank = db.query(finantialsModels.Bank).filter(
+        finantialsModels.Bank.id == bank_id,
+        finantialsModels.Bank.company_id == company_id,
+    ).first()
+    
+    if bank is None:
+        raise HTTPException(status_code=404, detail="Conta bancária não encontrada para a empresa")
+    if bank.bank_name == 'Itau':
+        try:
+            df = pd.read_excel(BytesIO(await file.read()), header=None)
+        except (ValueError, ImportError) as exc:
+            raise HTTPException(status_code=400, detail="Arquivo Excel inválido") from exc
+
+        def cell(row, index):
+            value = row.iloc[index] if index < len(row) else None
+            return None if pd.isna(value) else value
+
+        def amount(value):
+            if value is None:
+                raise ValueError("Valor ausente")
+            return float(value)
+
+        card = None
+        due_date = None
+        summary = {}
+        cardholder = None
+        section = None
+        items = []
+        in_entries = False
+
+        for _, row in df.iterrows():
+            label = str(cell(row, 0) or "").strip()
+            lower = label.casefold()
+            value = cell(row, 10)
+
+            if label.startswith("ITAU EMPRESAS"):
+                card = label
+            elif lower == "fechada":
+                due_date = cell(row, 2)
+            elif not in_entries and lower in (
+                "saldo da fatura anterior", "lançamentos nacionais",
+                "total de produtos, serviços e encargos", "total da fatura",
+            ) and value is not None and lower not in summary:
+                summary[lower] = value
+            elif lower == "lançamentos":
+                in_entries = True
+            elif in_entries:
+                if lower.startswith("total de lançamentos, produtos"):
+                    break
+                if " - FINAL " in label:
+                    cardholder = label
+                elif lower in ("lançamentos nacionais", "produtos, serviços e encargos"):
+                    section = label
+                elif isinstance(cell(row, 0), (datetime, date)):
+                    description = cell(row, 2)
+                    if not description or value is None or not section:
+                        raise HTTPException(status_code=400, detail="Lançamento incompleto na fatura")
+                    try:
+                        items.append(finantialsModels.CreditCardItems(
+                            data=cell(row, 0),
+                            tipo=section,
+                            descricao=f"{cardholder}: {description}" if cardholder else str(description),
+                            valor=amount(value),
+                        ))
+                    except (ValueError, TypeError) as exc:
+                        raise HTTPException(status_code=400, detail="Valor inválido em lançamento") from exc
+
+        try:
+            if not card or not isinstance(due_date, (datetime, date)) or "total da fatura" not in summary:
+                raise ValueError("Resumo da fatura ausente")
+            invoice = finantialsModels.CreditCard(
+                company_id=company_id,
+                bank_account_id=bank_id,
+                cartao=card,
+                vencimento=due_date,
+                saldo_fatura_anterior=amount(summary.get("saldo da fatura anterior", 0)),
+                lancamentos=amount(summary.get("lançamentos nacionais", 0)),
+                encargos=amount(summary.get("total de produtos, serviços e encargos", 0)),
+                total_fatura=amount(summary["total da fatura"]),
+                items=items,
+            )
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail="Resumo da fatura inválido") from exc
+
+    elif bank.bank_name == 'Nubank':
+        if due_date is None:
+            match = re.fullmatch(r"Nubank_(\d{4}-\d{2}-\d{2})\.csv", file.filename or "", re.IGNORECASE)
+            if match is None:
+                raise HTTPException(status_code=400, detail="Informe due_date ou envie um arquivo Nubank_AAAA-MM-DD.csv")
+            try:
+                due_date = date.fromisoformat(match.group(1))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="Data inválida no nome do arquivo") from exc
+
+        try:
+            df = pd.read_csv(BytesIO(await file.read()), dtype=str, keep_default_na=False)
+        except (UnicodeError, ValueError, pd.errors.ParserError) as exc:
+            raise HTTPException(status_code=400, detail="Arquivo CSV inválido") from exc
+        if set(df.columns) != {"date", "title", "amount"} or df.empty:
+            raise HTTPException(status_code=400, detail="CSV deve conter date, title e amount")
+
+        items = []
+        # previous_balance = Decimal("0")
+        # charges = Decimal("0")
+        # purchases = Decimal("0")
+        previous_balance = 0
+        charges = 0
+        purchases = 0
+        for index, row in df.iterrows():
+            try:
+                transaction_date = date.fromisoformat(row["date"].strip())
+                description = row["title"].strip()
+                if description == 'Pagamento recebido':
+                    continue
+                # value = Decimal(row["amount"].strip())
+                value = float(row["amount"].replace(',', '.'))
+                # if not description or not value.is_finite():
+                #     raise ValueError("Lançamento incompleto")
+            except (ValueError, InvalidOperation) as exc:
+                raise HTTPException(status_code=400, detail=f"Lançamento inválido na linha {index + 2}") from exc
+
+            normalized = description.casefold()
+            if normalized == "saldo em atraso" or normalized == "pagamento recebido":
+                kind = "saldo anterior / pagamento"
+                previous_balance += value
+            elif normalized.startswith(("iof", "multa", "juros", "encargos")):
+                kind = "encargos"
+                charges += value
+            else:
+                kind = "lançamentos"
+                purchases += value
+            items.append(finantialsModels.CreditCardItems(
+                data=transaction_date,
+                tipo=kind,
+                descricao=description,
+                valor=float(value),
+            ))
+
+        card = "Nubank"
+        invoice = finantialsModels.CreditCard(
+            company_id=company_id,
+            bank_account_id=bank_id,
+            cartao=card,
+            vencimento=due_date,
+            saldo_fatura_anterior=float(previous_balance),
+            lancamentos=float(purchases),
+            encargos=float(charges),
+            total_fatura=float(previous_balance + purchases + charges),
+            items=items,
+        )
+    else:
+        raise HTTPException(status_code=400, detail="Banco não suportado para fatura de cartão")
+
+    existing = db.query(finantialsModels.CreditCard).filter(
+        finantialsModels.CreditCard.company_id == company_id,
+        finantialsModels.CreditCard.bank_account_id == bank_id,
+        finantialsModels.CreditCard.cartao == card,
+        finantialsModels.CreditCard.vencimento == due_date,
+    ).first()
+    if existing:
+        return {"id": existing.id, "items": len(existing.items), "created": False}
+
+    try:
+        db.add(invoice)
+        db.commit()
+        db.refresh(invoice)
+    except Exception:
+        db.rollback()
+        raise
+    return {"id": invoice.id, "items": len(items), "created": True}
+
+
+@router.get("/credit-card", response_model=List[finantialsSchemas.CreditCardResponse])
+def get_credit_card_invoice(
+    company_id: int,
+    db: Session = Depends(get_db),
+):
+    invoice = db.query(finantialsModels.CreditCard).filter(
+        finantialsModels.CreditCard.company_id == company_id,
+    ).all()
+    if invoice is None:
+        raise HTTPException(status_code=404, detail="Fatura de cartão não encontrada")
+    return invoice

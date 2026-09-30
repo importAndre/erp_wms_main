@@ -1,6 +1,6 @@
 from ..database import Base
 from sqlalchemy import Column, Integer, String, Boolean, Float, ForeignKey, JSON, TIMESTAMP, text
-
+from sqlalchemy.orm import relationship
 
 class Taxes(Base):
     __tablename__ = 'FactTaxes'
@@ -11,6 +11,12 @@ class Taxes(Base):
     transaction_id = Column(
         Integer,
         ForeignKey("FactTransactions.id"),
+        nullable=True,
+        index=True
+    )
+    credit_card_id = Column(
+        Integer,
+        ForeignKey("FactCreditCardItems.id"),
         nullable=True,
         index=True
     )
@@ -31,6 +37,12 @@ class Fixos(Base):
     transaction_id = Column(
         Integer,
         ForeignKey("FactTransactions.id"),
+        nullable=True,
+        index=True
+    )
+    credit_card_id = Column(
+        Integer,
+        ForeignKey("FactCreditCardItems.id"),
         nullable=True,
         index=True
     )
@@ -146,3 +158,34 @@ class Transactions(Base):
         nullable=True,
         onupdate=text("CURRENT_TIMESTAMP")
     )
+
+
+class CreditCard(Base):
+    __tablename__ = "FactCreditCard"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    company_id = Column(Integer, ForeignKey("DimCompanies.id"), nullable=False, index=True)
+    bank_account_id = Column(Integer, ForeignKey("DimBankAccounts.id"), nullable=True, index=True)
+    cartao = Column(String, nullable=True)
+    vencimento = Column(TIMESTAMP(timezone=True), nullable=True)
+    saldo_fatura_anterior = Column(Float, nullable=True)
+    lancamentos = Column(Float, nullable=True)
+    encargos = Column(Float, nullable=True)
+    total_fatura = Column(Float, nullable=True)
+
+    items = relationship("CreditCardItems", back_populates='fatura', cascade='all, delete-orphan')
+
+
+class CreditCardItems(Base):
+    __tablename__ = "FactCreditCardItems"
+
+    id = Column(Integer, primary_key=True, index=True)
+    fatura_id = Column(Integer, ForeignKey("FactCreditCard.id"), nullable=True, index=True)
+    data = Column(TIMESTAMP(timezone=True), nullable=True)
+    tipo = Column(String, nullable=True)
+    descricao = Column(String, nullable=True)
+    valor = Column(Float, nullable=True)
+    category = Column(Integer, ForeignKey("DimTransactionCategories.id"), nullable=True, index=True)
+
+    fatura = relationship("CreditCard", back_populates='items')

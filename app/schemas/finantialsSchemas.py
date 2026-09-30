@@ -1,9 +1,38 @@
 from pydantic import BaseModel, Field
+from pydantic import ConfigDict
 from typing import Optional, List, Union
 from .companySchemas import CompanyResponse
-from datetime import datetime
+from datetime import datetime, date
 from .supplierSchemas import Payments
 from .productSchemas import ProductResponse
+from decimal import Decimal
+
+
+class CreditCardItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    data: Optional[datetime] = None
+    tipo: Optional[str] = None
+    descricao: Optional[str] = None
+    valor: Optional[float] = None
+    category: Optional[int] = None
+
+
+
+class CreditCardResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    company_id: int
+    bank_account_id: Optional[int] = None
+    cartao: Optional[str] = None
+    vencimento: Optional[datetime] = None
+    saldo_fatura_anterior: Optional[float] = None
+    lancamentos: Optional[float] = None
+    encargos: Optional[float] = None
+    total_fatura: Optional[float] = None
+    items: List[CreditCardItemResponse]
 
 
 class AtivoCirculante(BaseModel):
@@ -487,6 +516,18 @@ class AttributePayment(BaseModel):
     category_id: Optional[int] = None
     item_id: Optional[int] = None
 
+
+class AttributeCreditCardItem(BaseModel):
+    item_id: int
+    category_id: Optional[int] = None
+    motive_id: Optional[int] = None
+
+
+# Compatibilidade temporaria para imports antigos; o contrato da API agora e
+# categoria + motivo, como em AttributePayment.
+AttributeCreditCardPurchase = AttributeCreditCardItem
+
+
 class EditTransaction(BaseModel):
     transaction_id: int
     counterparty_document: str
@@ -497,3 +538,44 @@ class TransactionCategoryCreate(BaseModel):
 
 class TransactionCategoryResponse(TransactionCategoryCreate):
     id: int
+
+
+class DreResultado(BaseModel):
+    """Contrato novo: usar este modelo no response_model da rota de DRE.
+
+    Valores monetários são Decimal (JSON padrão do Pydantic: strings).
+    Margens são frações: 0.10 significa 10%. Não usar o schema DRE antigo:
+    ele não contém CMV separado, financeiro, pendências nem lucro líquido.
+    """
+
+    date_begin: date
+    date_end: date
+    faturamento: Decimal
+    receita_operacional_bruta: dict
+    total_deducoes_de_venda: Decimal
+    deducoes_de_venda: dict
+    receita_liquida_de_vendas: Decimal
+    custo_mercadoria_vendida: Decimal
+    cmv_details: dict
+    lucro_bruto: Decimal
+    total_gastos_variaveis: Decimal
+    gastos_variaveis: dict
+    margem_contribuicao_valor: Decimal
+    margem_contribuicao: Optional[Decimal]
+    total_custos_fixos: Decimal
+    custos_fixos: dict
+    lucro_operacional: Decimal
+    receitas_financeiras: dict
+    despesas_financeiras: dict
+    resultado_financeiro: Decimal
+    resultado_antes_irpj_csll: Decimal
+    tributos_sobre_lucro: dict
+    lucro_liquido: Optional[Decimal]
+    fora_da_dre: dict
+    distribuicao_lucros: Decimal
+    ponto_de_equilibrio_contabil: Optional[Decimal]
+    ponto_de_equilibrio_economico: Optional[Decimal]
+    provisorio: bool
+    avisos: List[str]
+    pendencias: List[dict]
+    detalhes: Optional[dict] = None
