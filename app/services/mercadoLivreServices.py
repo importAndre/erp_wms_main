@@ -138,7 +138,8 @@ class MercadoLivreOrder:
         url = f'{API_URL}/mercado-livre/orders/{self.order_id}'
         params = {
             "company_id": self.cid,
-            "shipment": True
+            "shipment": True,
+            "freight": True
         }
 
         req = requests.get(url=url, params=params)

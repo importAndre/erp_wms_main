@@ -79,6 +79,7 @@ def create_stock_movement(
     address.stock_move(movement=movement)
 
     product = productServices.Product(pid=movement.product_id, db=db)
+    print(product.available_stock)
     aval_qt = product.available_stock or 0
 
     if not movement.method:
@@ -87,6 +88,7 @@ def create_stock_movement(
         alter_qt = aval_qt + movement.quantity
 
     product.alter_field(available_stock=alter_qt)
+    print(product.available_stock)
 
     return address.get_products()
 

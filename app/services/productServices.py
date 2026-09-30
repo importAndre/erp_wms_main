@@ -10,6 +10,7 @@ import requests
 from ..server_config import API_URL
 from .supplierServices import Supplier
 from .companyServices import Company
+from .stockUpdateServices import mark_stock_updates_done, read_stock_updates
 import pandas as pd
 
 products_cache = {}
@@ -100,9 +101,8 @@ class Product:
             self.company = Company(company_id=self.company_id, db=self.db).get_company()
             if refresh:
                 self._update_price()
-                # self._get_last_sell_date()
-            if self.load_stock:
                 self._update_stock()
+                # self._get_last_sell_date()
 
             virtual_query = self.db.query(stockModels.VirtualStockMovements)\
                 .filter(stockModels.VirtualStockMovements.product_id == self.pid)\
@@ -198,27 +198,42 @@ class Product:
             if req.status_code == 200:
                 data = req.json()
                 try:
-                    print(data)
                     return data[sku]['stock'], data[sku]['date']
                 except KeyError:
                     return 0, None
             return 0, None
 
+        def get_products_to_update():
+            df = pd.read_csv("stock_to_update.csv")
+            return [row['sku'] for _, row in df.iterrows()]
+
         def update_virtual():
             pid_full_stock = 0
-            compositions = self.db.query(compositionModels.CompositionItems).filter(compositionModels.CompositionItems.product_id == self.pid).all()
-            for c in compositions:
+            sku_loaded = False
+            csv_products = get_products_to_update()
+            # print(csv_products)
+            full_date = None
+            full_stock = 0
+            compositions_items = self.db.query(compositionModels.CompositionItems).filter(compositionModels.CompositionItems.product_id == self.pid).all()
+            for c in compositions_items:
                 comp_obj = compositionServices.Composition(cid=c.composition_id, db=self.db).get_composition()
+                if comp_obj.sku == self.sku:
+                    sku_loaded = True
+                if comp_obj.sku not in csv_products:
+                    continue
                 full_stock, full_date = get_full_stock(sku=comp_obj.sku, company_id=comp_obj.company_id)
-                # print(comp_obj.sku, full_stock, date)
                 if not full_date:
-                    full_date = datetime.now()
                     continue
                 for p in comp_obj.items:
                     if p.product.id == self.pid:
                         pid_full_stock += full_stock * p.amount_required
 
+            if not sku_loaded and self.sku in csv_products:
+                full_stock, full_date = get_full_stock(sku=self.sku, company_id=self.company_id)
+                pid_full_stock += full_stock
 
+            if not full_date:
+                return
             new_move = stockModels.VirtualStockMovements(
                 product_id=self.id,
                 quantity=pid_full_stock,

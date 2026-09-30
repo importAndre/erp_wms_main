@@ -39,11 +39,12 @@ def hello():
     return {"message": "Welcome to the ultimate erp wms"}
 
 
-from app.services.systemServices import check_products_update
+from app.services.systemServices import check_products_update, check_stock_update
 from app.routers.orders import get_ml_orders
 def start_scheduler():
     scheduler = BackgroundScheduler()
     scheduler.add_job(check_products_update, 'interval', minutes=30)
+    scheduler.add_job(check_stock_update, 'interval', minutes=5)
     scheduler.add_job(get_ml_orders, 'interval', minutes=5)
     scheduler.start()
 

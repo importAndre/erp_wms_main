@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing import Any, List, Optional
 from datetime import datetime
+from decimal import Decimal
 
 
 class SupplierBase(BaseModel):
@@ -141,6 +142,10 @@ class PurchaseBase(BaseModel):
     c_prod: Optional[str] = None
     seller_cnpj: Optional[str] = None
     numero_nota: Optional[str] = None
+    unit_value: Optional[float] = None
+    quantity: Optional[int] = None
+    total_value: Optional[float] = None
+    purchase_date: Optional[datetime] = None
 
 
 class PurchaseCreate(PurchaseBase):
@@ -150,10 +155,9 @@ class PurchaseCreate(PurchaseBase):
 class PurchaseResponse(PurchaseBase):
     id: Optional[int] = None
     invoice_id: Optional[int] = None
-    quantity: Optional[int] = None
-    unit_value: Optional[float] = None
-    total_value: Optional[float] = None
-    purchase_date: Optional[datetime] = None
+    transaction_id: Optional[int] = None
+    credit_card_id: Optional[int] = None
+
 
 
 class SupplierProductsResponse(BaseModel):
@@ -169,6 +173,8 @@ class SupplierOrderItemCreate(BaseModel):
     product_id: Optional[int] = None
     composition_id: Optional[int] = None
     quantity: int = Field(gt=0)
+    check_quantity: float = Field(default=0, ge=0)
+    order_price: Decimal = Field(ge=0, max_digits=14, decimal_places=2)
 
     @model_validator(mode="after")
     def validate_product_reference(self):
@@ -184,6 +190,10 @@ class SupplierOrderItemCreate(BaseModel):
         return self
 
 
+class SupplierOrderItemUpdate(SupplierOrderItemCreate):
+    id: Optional[int] = Field(default=None, gt=0)
+
+
 class SupplierOrderCreate(BaseModel):
     company_id: int
     invoice_id: Optional[int] = None
@@ -196,16 +206,26 @@ class SupplierOrderCreate(BaseModel):
 
 
 class SupplierOrderUpdate(BaseModel):
+    company_id: Optional[int] = Field(default=None, gt=0)
     invoice_id: Optional[int] = None
+    supplier_internal_code: Optional[str] = Field(default=None, min_length=1)
     arrived_percent: Optional[float] = Field(default=None, ge=0, le=100)
     invoice_emit: Optional[datetime] = None
     date_expected: Optional[datetime] = None
     arrived_at: Optional[datetime] = None
+    items: Optional[List[SupplierOrderItemUpdate]] = Field(
+        default=None,
+        min_length=1,
+    )
 
     @model_validator(mode="after")
     def validate_update_fields(self):
         if not self.model_fields_set:
             raise ValueError("Informe ao menos um campo para atualizar")
+        if self.items is not None:
+            item_ids = [item.id for item in self.items if item.id is not None]
+            if len(item_ids) != len(set(item_ids)):
+                raise ValueError("Um item não pode ser informado mais de uma vez")
         return self
 
 

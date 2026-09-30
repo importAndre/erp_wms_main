@@ -10,6 +10,7 @@ from typing import List, Optional, Dict, Union
 import requests
 from ..server_config import API_URL
 from sqlalchemy import exists
+from tqdm import tqdm
 
 router = APIRouter(
     prefix="/products",
@@ -58,6 +59,23 @@ def create_product(
 PROCESSING = False
 PROCESSED = 0
 
+# @router.get(
+#     "/", 
+#     response_model=Union[List[productSchemas.ProductResponse], Dict]
+# )
+# def get_products(
+#     current_user=Depends(get_current_user),
+#     refresh: Optional[bool] = False,
+#     stock_refresh: Optional[bool] = False,
+#     db: Session = Depends(get_db)
+# ):
+#     result = []
+#     query = db.query(productModels.Product).all()
+#     pbar = tqdm(total=len(query), position=0, leave=True, desc='Refresh Products')
+#     for item in query:
+#         result.append(productServices.Product(product=item, db=db).get_product(refresh=refresh))
+#         pbar.update(1)
+#     return result
 @router.get(
     "/", 
     response_model=Union[List[productSchemas.ProductResponse], Dict]
@@ -70,6 +88,7 @@ def get_products(
 ):
     global loaded_products
     global PROCESSING, PROCESSED
+    loaded_products = []
     if not loaded_products or refresh:
         query = db.query(productModels.Product).all()
         total = len(query)
@@ -83,10 +102,12 @@ def get_products(
                     "percentage": (PROCESSED / total) * 100
                 }
                 }
+        pbar = tqdm(total=len(query), position=0, leave=True, desc='Refresh Products')
         for item in query:
             PROCESSING = True
             loaded_products.append(productServices.Product(product=item, db=db, load_stock=stock_refresh).get_product(refresh=refresh))
             PROCESSED += 1
+            pbar.update(1)
         PROCESSING = False
         PROCESSED = 0
     return loaded_products
@@ -105,12 +126,13 @@ def get_product(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    if refresh:
+    # if refresh:
         # prod = productServices.Product(pid=pid, db=db, load_stock=load_stock)
-        prod = productServices.Product(pid=pid, db=db, load_stock=True)
-    else:
-        prod = productServices.Product(pid=pid, db=db, load_stock=False)
+    #     prod = productServices.Product(pid=pid, db=db, load_stock=True)
+    # else:
+    #     prod = productServices.Product(pid=pid, db=db, load_stock=False)
 
+    prod = productServices.Product(pid=pid, db=db)
     if historical_prices:
         prod.get_historical_price()
 
@@ -215,7 +237,7 @@ def update_virtual_stock(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)    
 ):
-    from .mercado_livre import update_virtual_stock
+    # from .mercado_livre import update_virtual_stock
     if not date:
         date = datetime.now()
     product = productServices.Product(pid=pid, db=db).get_product()
@@ -244,24 +266,24 @@ def update_virtual_stock(
     for c in compositions:
         comp_obj = compositionServices.Composition(cid=c.composition_id, db=db).get_composition()
         full_stock = get_full_stock(sku=comp_obj.sku, company_id=comp_obj.company_id)
-        for p in comp_obj.items:
-            if p.product.id == pid:
-                pid_full_stock += full_stock * p.amount_required
-                # if full_stock > 0:
-                #     print("comp", comp_obj.sku, 'stock', full_stock, "pid_full_stock", pid_full_stock)
+    #     for p in comp_obj.items:
+    #         if p.product.id == pid:
+    #             pid_full_stock += full_stock * p.amount_required
+    #             # if full_stock > 0:
+    #             #     print("comp", comp_obj.sku, 'stock', full_stock, "pid_full_stock", pid_full_stock)
 
 
-    new_move = stockModels.VirtualStockMovements(
-        product_id=product.id,
-        quantity=pid_full_stock,
-        location='ml_fulfillment',
-        created_at=date
-    )
-    print(new_move.product_id, new_move.quantity)
-    db.add(new_move)
-    db.commit()
-    db.refresh(new_move)
-    return new_move
+    # new_move = stockModels.VirtualStockMovements(
+    #     product_id=product.id,
+    #     quantity=pid_full_stock,
+    #     location='ml_fulfillment',
+    #     created_at=date
+    # )
+    # print(new_move.product_id, new_move.quantity)
+    # db.add(new_move)
+    # db.commit()
+    # db.refresh(new_move)
+    # return new_move
 
 
 @router.get("/sales")
@@ -301,7 +323,7 @@ def product_sales(
         old = p.get_product_date(date=date_begin)
         sales = p.get_sales(date_begin=date_begin, date_end=date_end)
         # print(p.sku, len(sales.invoices))
-        revenue_percentage = sales.v_prod / dre.faturamento
+        revenue_percentage = float(sales.v_prod) / float(dre.faturamento)
         result[atual.sku] = {
             "product": atual,
             "old_product": old,
@@ -313,10 +335,10 @@ def product_sales(
             "old_stock_qt": old.stock,
             "current_stock": atual.stock_value,
             "current_stock_qt": atual.stock,
-            "cmv": old.stock_value + purchases.v_prod - atual.stock_value,
+            "cmv": float(old.stock_value) + float(purchases.v_prod) - float(atual.stock_value),
             "revenue_percentage": revenue_percentage,
-            "gross_profit": dre.lucro_bruto * revenue_percentage,
-            "liquid_profit": dre.lucro_operacional * revenue_percentage
+            "gross_profit": float(dre.lucro_bruto) * revenue_percentage,
+            "liquid_profit": float(dre.lucro_operacional) * revenue_percentage
         }
 
     return result

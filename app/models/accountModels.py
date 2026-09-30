@@ -103,6 +103,12 @@ class EmployeePayroll(Base):
         nullable=True,
         index=True
     )
+    credit_card_id = Column(
+        Integer,
+        ForeignKey("FactCreditCardItems.id"),
+        nullable=True,
+        index=True
+    )
 
     ano_referencia = Column(Integer, nullable=False, index=True)
     mes_referencia = Column(Integer, nullable=False, index=True)

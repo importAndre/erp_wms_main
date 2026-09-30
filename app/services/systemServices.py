@@ -6,6 +6,7 @@ from ..schemas import finantialsSchemas
 from ..database import get_db, SessionLocal
 import requests
 from ..server_config import API_URL
+from .stockUpdateServices import write_stock_updates
 
 
 router = APIRouter(
@@ -135,4 +136,19 @@ def check_products_update(
 
 @router.get("/stock")
 def check_stock_update():
-    pass
+    url = f"{API_URL}/mercado-livre/listings/full-stock"
+    params = {
+        "company_id": 1
+    }
+    req = requests.get(url=url, params=params)
+    req.raise_for_status()
+    data = req.json()
+    if not isinstance(data, dict):
+        return {"message": "Invalid full-stock response", "total": 0}
+
+    total = write_stock_updates(data)
+    return {
+        "message": "Stock update CSV created",
+        "file": "stock_to_update.csv",
+        "total": total,
+    }

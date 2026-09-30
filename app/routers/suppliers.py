@@ -79,6 +79,64 @@ def _get_payment_installments(nf: supplierSchemas.SupplierPaymentsBase):
 
     return []
 
+def _validate_supplier_order_references(
+    db: Session,
+    company_id: int,
+    supplier_internal_code: str,
+    items,
+):
+    if not db.query(accountModels.Company.id).filter(
+        accountModels.Company.id == company_id
+    ).first():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Empresa não encontrada",
+        )
+
+    if not db.query(suppliersModels.Suppliers.id).filter(
+        suppliersModels.Suppliers.internal_code == supplier_internal_code
+    ).first():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Fornecedor não encontrado pelo código interno informado",
+        )
+
+    product_ids = {item.product_id for item in items if item.product_id is not None}
+    composition_ids = {
+        item.composition_id for item in items if item.composition_id is not None
+    }
+    existing_product_ids = {
+        row[0]
+        for row in db.query(productModels.Product.id).filter(
+            productModels.Product.id.in_(product_ids),
+            productModels.Product.company_id == company_id,
+        ).all()
+    } if product_ids else set()
+    missing_product_ids = product_ids - existing_product_ids
+    if missing_product_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Produtos não encontrados na empresa: {sorted(missing_product_ids)}",
+        )
+
+    existing_composition_ids = {
+        row[0]
+        for row in db.query(compositionModels.Composition.id).filter(
+            compositionModels.Composition.id.in_(composition_ids),
+            compositionModels.Composition.company_id == company_id,
+        ).all()
+    } if composition_ids else set()
+    missing_composition_ids = composition_ids - existing_composition_ids
+    if missing_composition_ids:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                "Composições não encontradas na empresa: "
+                f"{sorted(missing_composition_ids)}"
+            ),
+        )
+
+
 @router.post("/create", response_model=supplierSchemas.SupplierResponse)
 def create_supplier(
     supplier: supplierSchemas.SupplierCreate,
@@ -144,56 +202,12 @@ def register_supplier_order(
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    company_exists = db.query(accountModels.Company.id).filter(
-        accountModels.Company.id == order.company_id
-    ).first()
-    if not company_exists:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Empresa não encontrada",
-        )
-
-    supplier_exists = db.query(suppliersModels.Suppliers.id).filter(
-        suppliersModels.Suppliers.internal_code == order.supplier_internal_code
-    ).first()
-    if not supplier_exists:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Fornecedor não encontrado pelo código interno informado",
-        )
-
-    product_ids = {item.product_id for item in order.items if item.product_id is not None}
-    composition_ids = {
-        item.composition_id for item in order.items if item.composition_id is not None
-    }
-
-    existing_product_ids = {
-        row[0]
-        for row in db.query(productModels.Product.id).filter(
-            productModels.Product.id.in_(product_ids),
-            productModels.Product.company_id == order.company_id,
-        ).all()
-    } if product_ids else set()
-    missing_product_ids = product_ids - existing_product_ids
-    if missing_product_ids:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Produtos não encontrados na empresa: {sorted(missing_product_ids)}",
-        )
-
-    existing_composition_ids = {
-        row[0]
-        for row in db.query(compositionModels.Composition.id).filter(
-            compositionModels.Composition.id.in_(composition_ids),
-            compositionModels.Composition.company_id == order.company_id,
-        ).all()
-    } if composition_ids else set()
-    missing_composition_ids = composition_ids - existing_composition_ids
-    if missing_composition_ids:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Composições não encontradas na empresa: {sorted(missing_composition_ids)}",
-        )
+    _validate_supplier_order_references(
+        db=db,
+        company_id=order.company_id,
+        supplier_internal_code=order.supplier_internal_code,
+        items=order.items,
+    )
 
     order_data = order.model_dump(exclude={"items"})
     new_order = suppliersModels.SupplierOrders(**order_data)
@@ -284,7 +298,60 @@ def update_supplier_order(
             detail="Pedido do fornecedor não encontrado",
         )
 
-    for field, value in update.model_dump(exclude_unset=True).items():
+    update_data = update.model_dump(exclude_unset=True, exclude={"items"})
+    required_fields = {"company_id", "supplier_internal_code", "arrived_percent"}
+    null_required_fields = sorted(
+        field
+        for field in required_fields
+        if field in update_data and update_data[field] is None
+    )
+    if null_required_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Os campos {', '.join(null_required_fields)} não podem ser nulos",
+        )
+
+    company_id = update_data.get("company_id", order.company_id)
+    supplier_internal_code = update_data.get(
+        "supplier_internal_code",
+        order.supplier_internal_code,
+    )
+    items = update.items if update.items is not None else order.items
+    _validate_supplier_order_references(
+        db=db,
+        company_id=company_id,
+        supplier_internal_code=supplier_internal_code,
+        items=items,
+    )
+
+    if update.items is not None:
+        existing_items = {item.id: item for item in order.items}
+        requested_existing_ids = {
+            item.id for item in update.items if item.id is not None
+        }
+        invalid_item_ids = requested_existing_ids - set(existing_items)
+        if invalid_item_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Itens não pertencem ao pedido informado: "
+                    f"{sorted(invalid_item_ids)}"
+                ),
+            )
+
+        updated_items = []
+        for item_data in update.items:
+            values = item_data.model_dump(exclude={"id"})
+            if item_data.id is None:
+                item = suppliersModels.SupplierOrderItems(**values)
+            else:
+                item = existing_items[item_data.id]
+                for field, value in values.items():
+                    setattr(item, field, value)
+            updated_items.append(item)
+        order.items = updated_items
+
+    for field, value in update_data.items():
         setattr(order, field, value)
 
     try:
@@ -786,39 +853,60 @@ def register_purchase(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user)
 ):
-    company = companyServices.Company(company_id=purchase.company_id, db=db).get_company()
-    url = f"{API_URL}/invoices/product"
-    params = {
-        "cprod": purchase.c_prod,
-        "supplier_cnpj": purchase.seller_cnpj,
-        "buyer_cnpj": company.cnpj,
-        "numero": purchase.numero_nota
-        }
-    req = requests.get(url=url, params=params)
-    if req.status_code == 200:
-        data = req.json()
-        # return data
-        invoice = finantialsSchemas.InvoiceBase.model_validate(data['invoice'])
-        item = finantialsSchemas.InvoiceItemBase.model_validate(data['item'])
-    
+    if purchase.numero_nota:
+        company = companyServices.Company(company_id=purchase.company_id, db=db).get_company()
+        url = f"{API_URL}/invoices/product"
+        params = {
+            "cprod": purchase.c_prod,
+            "supplier_cnpj": purchase.seller_cnpj,
+            "buyer_cnpj": company.cnpj,
+            "numero": purchase.numero_nota
+            }
+        req = requests.get(url=url, params=params)
+        if req.status_code == 200:
+            data = req.json()
+            # return data
+            invoice = finantialsSchemas.InvoiceBase.model_validate(data['invoice'])
+            item = finantialsSchemas.InvoiceItemBase.model_validate(data['item'])
+        
+            new_purchase = suppliersModels.Purchases(
+                company_id=purchase.company_id,
+                user_id=current_user.id,
+                invoice_id=invoice.id,
+                category=purchase.category,
+                asset_name=purchase.asset_name,
+                c_prod=purchase.c_prod,
+                seller_cnpj=purchase.seller_cnpj,
+                quantity=item.q_com,
+                unit_value=item.v_un_com,
+                total_value=item.v_prod,
+                purchase_date=invoice.dh_emissao
+            )
+            db.add(new_purchase)
+            db.commit()
+            db.refresh(new_purchase)
+            return new_purchase
+
+    else:
+        if not purchase.total_value:
+            purchase.total_value = purchase.unit_value * purchase.quantity
         new_purchase = suppliersModels.Purchases(
-            company_id=purchase.company_id,
-            user_id=current_user.id,
-            invoice_id=invoice.id,
-            category=purchase.category,
-            asset_name=purchase.asset_name,
-            c_prod=purchase.c_prod,
-            seller_cnpj=purchase.seller_cnpj,
-            quantity=item.q_com,
-            unit_value=item.v_un_com,
-            total_value=item.v_prod,
-            purchase_date=invoice.dh_emissao
-        )
+                company_id=purchase.company_id,
+                user_id=current_user.id,
+                # invoice_id=,
+                category=purchase.category,
+                asset_name=purchase.asset_name,
+                c_prod=purchase.c_prod,
+                seller_cnpj=purchase.seller_cnpj,
+                quantity=purchase.quantity,
+                unit_value=purchase.unit_value,
+                total_value=purchase.total_value,
+                purchase_date=purchase.purchase_date
+            )
         db.add(new_purchase)
         db.commit()
         db.refresh(new_purchase)
         return new_purchase
-
 
 
     return {"message": f"{purchase.cprod} not found in database."}

@@ -61,7 +61,7 @@ class Composition:
             self.company_id = i.company_id
 
             prod_obj = Product(pid=i.product_id, db=self.db)
-            prod = prod_obj.get_product(refresh=refresh)
+            prod = prod_obj.get_product(refresh=False)
 
             item = compositionSchemas.ItemResponse(
                 product=prod,

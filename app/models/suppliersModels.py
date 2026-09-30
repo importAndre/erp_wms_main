@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, UniqueConstraint, Float, text, Boolean, BigInteger
+from sqlalchemy import Column, Integer, String, ForeignKey, UniqueConstraint, Float, Numeric, text, Boolean, BigInteger
 from ..database import Base
 from sqlalchemy.sql.sqltypes import TIMESTAMP
 from sqlalchemy.orm import relationship
@@ -33,6 +33,12 @@ class SupplierPayments(Base):
         nullable=True,
         index=True
     )
+    credit_card_id = Column(
+        Integer,
+        ForeignKey("FactCreditCardItems.id"),
+        nullable=True,
+        index=True
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("DimCompanies.id"), nullable=False)
@@ -60,12 +66,14 @@ class Purchases(Base):
     invoice_id = Column(Integer, nullable=True)
     category = Column(String, nullable=False)
     asset_name = Column(String, nullable=False)
-    c_prod = Column(String, nullable=False)
-    seller_cnpj = Column(String, nullable=False)
+    c_prod = Column(String, nullable=True)
+    seller_cnpj = Column(String, nullable=True)
     quantity = Column(Integer, nullable=False)
     unit_value = Column(Float, nullable=False)
     total_value = Column(Float, nullable=False)
     purchase_date = Column(TIMESTAMP(timezone=True), nullable=False)
+    transaction_id = Column(Integer, ForeignKey("FactTransactions.id"), nullable=True)
+    credit_card_id = Column(Integer, ForeignKey("FactCreditCardItems.id"), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("invoice_id", "c_prod", "quantity", "company_id", name='uq_inv_prod_qt_cid'),
@@ -98,6 +106,7 @@ class SupplierOrderItems(Base):
     composition_id = Column(Integer, ForeignKey("DimCompositions.id"), nullable=True)
     quantity = Column(Integer)
     check_quantity = Column(Float, default=0)
+    order_price = Column(Numeric(14, 2), nullable=False)
 
     order = relationship("SupplierOrders", back_populates="items")
 
