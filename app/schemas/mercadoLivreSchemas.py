@@ -191,6 +191,19 @@ class MercadoLivreListingResponse(BaseModel):
     listing: Optional[MercadoLivreListing] = None
     items: Optional[List[Union[CompositionResponse, ProductResponse]]] = None
 
+class FreghtBilling(BaseModel):
+    company_id: Optional[int] = None
+    data_pedido: Optional[datetime] = None
+    data_contabil: Optional[datetime] = None
+    cep_dest: Optional[str] = None
+    volumes: Optional[int] = None
+    valor: Optional[float] = None
+    remessa: Optional[int] = None
+    data_coleta: Optional[datetime] = None
+    id: Optional[int] = None
+    servico: Optional[str] = None
+    nota_fiscal: Optional[str] = None
+    peso: Optional[float] = None
 
 class MercadoLivreOrder(BaseModel):
     company_id: Optional[int] = None
@@ -223,6 +236,8 @@ class MercadoLivreOrder(BaseModel):
     payment_id: Optional[int] = None
     money_release_date: Optional[datetime] = None
     money_release_status: Optional[str] = None
+    freight_billing: Optional[FreghtBilling] = None
+
 
 
 

@@ -57,6 +57,7 @@ def get_account(
 def get_listings(
     offset: int = 0,
     limit: int = 100,
+    company_id: Optional[int] = None,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -66,6 +67,9 @@ def get_listings(
     companies = user.get_companies()
     result = {}
     for c in companies:
+        if company_id:
+            if company_id != c.id:
+                continue
         params = {
             "company_id": c.id,
             "desc": False,
